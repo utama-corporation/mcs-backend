@@ -4,15 +4,31 @@ const cors = require('cors');  // Menggunakan CORS untuk menangani permintaan li
 const bodyParser = require('body-parser');
 const { connectDb } = require('./db');  // Menghubungkan ke database
 const http = require('http');  // Untuk membuat server HTTP
-const WebSocket = require('ws');  // Menggunakan WebSocket
+const { wss } = require('./websocket'); // Import dari root
 const authRoutes = require('./routes/authRoutes');  // Rute untuk autentikasi
 const stockOpnameRoutes = require('./routes/stockOpnameRoutes');  // Rute untuk autentikasi
-
+const masterRoutes = require('./routes/masterRoutes');  // Rute untuk autentikasi
 
 
 const app = express();
 const server = http.createServer(app);  // Membuat server HTTP menggunakan express
-const wss = new WebSocket.Server({ server });  // Membuat WebSocket server
+
+// WebSocket upgrade handler
+server.on('upgrade', (request, socket, head) => {
+  // Anda bisa menambahkan auth disini
+  const { url } = request;
+  const noso = new URL(url, 'http://dummy.com').searchParams.get('noso');
+  
+  if (!noso) {
+    return socket.destroy();
+  }
+
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
+});
+
+
 
 const port = process.env.PORT || 6000;  // Menggunakan port dari .env atau default 5000
 
@@ -30,26 +46,13 @@ app.use('/api', authRoutes);  // Rute autentikasi
 
 app.use('/api', stockOpnameRoutes);  // Rute autentikasi
 
+app.use('/api', masterRoutes);  
 
-// WebSocket connection handling
-wss.on('connection', (ws) => {
-  console.log('Client connected via WebSocket');
-
-  // Mengirim pesan ke klien setelah koneksi
-  ws.send('Welcome to WebSocket server!');
-
-
-  // Menangani koneksi yang terputus
-  ws.on('close', () => {
-    console.log('Client disconnected');
-  });
-});
 
 // Panggil connectDb sebelum server.listen
 connectDb().then(() => {
     server.listen(port, () => {
       console.log(`Server berjalan di http://localhost:${port}`);
-      console.log(`WebSocket berjalan di ws://localhost:${port}`);
     });
   }).catch(err => {
     console.error('Gagal memulai server:', err);

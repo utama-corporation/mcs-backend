@@ -5,33 +5,62 @@ const { pool, connectDb } = require('../db');  // Import MySQL connection pool
 const router = express.Router();
 const axios = require("axios");
 const cheerio = require("cheerio");
+const { broadcast } = require('../websocket'); // Import dari root
+
 
 // Helper function to format dates using Moment.js
 const formatDate = (date) => {
   return moment(date).format('DD MMM YYYY');
 };
 
+
 // Route to get Stock Opname Number
 router.get('/no-stock-opname', verifyToken, async (req, res) => {
   try {
-    await connectDb();  // Ensure MySQL connection is established
-    
-    // Query the database to get Stock Opname numbers and dates
+    // Query the main table to get NoSO and Tanggal
     const [rows] = await pool.query('SELECT NoSO, Tanggal FROM tb_stockopname_h');
-    
+
     // If no records are found, return 404 error
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Tidak ada Jadwal Stock Opname saat ini' });
     }
 
-    // Format the result set
-    const formattedData = rows.map(item => ({
-      NoSO: item.NoSO,
-      Tanggal: formatDate(item.Tanggal)
-    }));
+    // Process each NoSO to get related companies, categories, and locations
+    const result = await Promise.all(
+      rows.map(async (item) => {
+        const { NoSO, Tanggal } = item;
 
-    // Return the formatted data as JSON response
-    res.json(formattedData);
+        // Query to get related companies for the current NoSO
+        const [companies] = await pool.query(
+          'SELECT IdCompany FROM tb_stockopname_dcompany WHERE NoSO = ?',
+          [NoSO]
+        );
+
+        // Query to get related categories for the current NoSO
+        const [categories] = await pool.query(
+          'SELECT IdCategory FROM tb_stockopname_dcategory WHERE NoSO = ?',
+          [NoSO]
+        );
+
+        // Query to get related locations for the current NoSO
+        const [locations] = await pool.query(
+          'SELECT IdLocation FROM tb_stockopname_dlocation WHERE NoSO = ?',
+          [NoSO]
+        );
+
+        // Format the result for the current NoSO
+        return {
+          NoSO,
+          Tanggal: formatDate(Tanggal), // Format date if necessary
+          companies: companies.map((c) => c.IdCompany),
+          categories: categories.map((c) => c.IdCategory),
+          locations: locations.map((l) => l.IdLocation),
+        };
+      })
+    );
+
+    // Return the final aggregated data as JSON
+    res.json(result);
   } catch (error) {
     console.error('Error:', error.message);
     res.status(500).json({ message: 'Internal Server Error' });
@@ -39,26 +68,206 @@ router.get('/no-stock-opname', verifyToken, async (req, res) => {
 });
 
 
-// Route to get Asset data based on NoSO
-router.get('/no-stock-opname/:noso', verifyToken, async (req, res) => {
+// Route to get Stock Opname Number
+router.get('/no-stock-opname/nosomax', verifyToken, async (req, res) => {
   try {
-    await connectDb(); // Koneksi DB
+    await connectDb();
+    
+    // Query untuk mendapatkan NoSO terakhir
+    const [rows] = await pool.query(`
+      SELECT NoSO 
+      FROM tb_stockopname_h 
+      ORDER BY NoSO DESC 
+      LIMIT 1
+    `);
+    
+    if (rows.length === 0) {
+      // Jika tidak ada data, bisa mengembalikan nilai default pertama
+      return res.json({ nextNoSO: 'SO.00000001' });
+    }
+
+    const lastNoSO = rows[0].NoSO;
+    
+    // Pisahkan prefix dan angka
+    const parts = lastNoSO.split('.');
+    const prefix = parts[0]; // 'SO'
+    const numberStr = parts[1]; // '00000001'
+    
+    // Konversi ke number, tambahkan 1, lalu format kembali ke 8 digit
+    const number = parseInt(numberStr, 10) + 1;
+    const nextNumberStr = number.toString().padStart(8, '0');
+    
+    const nextNoSO = `${prefix}.${nextNumberStr}`;
+
+    res.json({ nextNoSO });
+  } catch (error) {
+    console.error('Error:', error.message);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+});
+
+
+// Fetch data asset before
+router.get('/no-stock-opname-current/:noso', verifyToken, async (req, res) => {
+  try {
+    await connectDb();
 
     const { noso } = req.params;
     const limit = 50;
-    const offset = parseInt(req.query.offset) || 0; // default 0
+    const offset = parseInt(req.query.offset) || 0;
+    const companyQuery = req.query.company;
+    const categoryQuery = req.query.category;
+    const locationQuery = req.query.location;
 
-    // Query data asset dengan pagination
-    const [rows] = await pool.query(
-      'SELECT AssetCode, Username FROM tb_stockopname_d_hasil WHERE NoSO = ? ORDER BY DateTimeScan DESC LIMIT ? OFFSET ?',
-      [noso, limit, offset]
-    );
+    // Base condition - NoSO wajib dan belum discan
+    let filterConditions = 'd.NoSO = ? AND h.AssetCode IS NULL';
+    const queryParams = [noso];
 
-    // Query total count dari data yang cocok dengan NoSO
-    const [countResult] = await pool.query(
-      'SELECT COUNT(*) as total FROM tb_stockopname_d_hasil WHERE NoSO = ?',
-      [noso]
-    );
+    // ✅ Filter Company (AssetCode prefix)
+    if (companyQuery) {
+      const companyList = companyQuery.split(',').map(c => c.trim());
+      const companyConditions = companyList.map(() => 
+        `SUBSTRING_INDEX(d.AssetCode, '/', 1) = ?`
+      ).join(' OR ');
+      filterConditions += ` AND (${companyConditions})`;
+      queryParams.push(...companyList);
+    }
+
+    // ✅ Filter CategoryCode
+    if (categoryQuery) {
+      const categoryList = categoryQuery.split(',').map(c => c.trim());
+      const categoryConditions = categoryList.map(() =>
+        `SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', -2), '-', 1) = ?`
+      ).join(' OR ');
+      filterConditions += ` AND (${categoryConditions})`;
+      queryParams.push(...categoryList);
+    }
+
+    // ✅ Filter Location
+    if (locationQuery) {
+      const locationList = locationQuery.split(',').map(l => l.trim());
+      const locationConditions = locationList.map(() =>
+        `SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) = ?`
+      ).join(' OR ');
+      filterConditions += ` AND (${locationConditions})`;
+      queryParams.push(...locationList);
+    }
+
+    // Query data dengan LEFT JOIN ke tabel hasil
+    const dataQuery = `
+      SELECT d.AssetCode, a.AssetName
+      FROM tb_stockopname_d d
+      LEFT JOIN tb_stockopname_d_hasil h ON d.AssetCode = h.AssetCode AND d.NoSO = h.NoSO
+      LEFT JOIN asset a ON d.AssetCode = a.AssetCode
+      WHERE ${filterConditions}
+      ORDER BY d.AssetCode DESC
+      LIMIT ? OFFSET ?
+    `;
+    
+    const dataParams = [...queryParams, limit, offset];
+
+    // Query total count
+    const countQuery = `
+      SELECT COUNT(*) as total
+      FROM tb_stockopname_d d
+      LEFT JOIN tb_stockopname_d_hasil h ON d.AssetCode = h.AssetCode AND d.NoSO = h.NoSO
+      WHERE ${filterConditions}
+    `;
+
+    const [rows] = await pool.query(dataQuery, dataParams);
+    const [countResult] = await pool.query(countQuery, queryParams);
+    const total = countResult[0]?.total || 0;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ 
+        message: `Tidak ada data asset yang belum discan untuk NoSO: ${noso}` 
+      });
+    }
+
+    res.json({
+      data: rows,
+      total,
+      nextOffset: offset + limit,
+      hasMore: offset + limit < total
+    });
+
+  } catch (error) {
+    console.error('Error:', error.message);
+    res.status(500).json({ 
+      message: 'Internal Server Error',
+      error: error.message 
+    });
+  }
+});
+
+
+// Route to get Asset data based on NoSO
+router.get('/no-stock-opname/:noso', verifyToken, async (req, res) => {
+  try {
+    await connectDb();
+
+    const { noso } = req.params;
+    const limit = 50;
+    const offset = parseInt(req.query.offset) || 0;
+    const companyQuery = req.query.company;
+    const categoryQuery = req.query.category;
+    const locationQuery = req.query.location;
+
+    let filterConditions = 'h.NoSO = ?'; // Tambahkan alias 'h'
+    const queryParams = [noso];
+
+    // ✅ Filter berdasarkan Company
+    if (companyQuery) {
+      const companyList = companyQuery.split(',').map(c => c.trim());
+      const companyConditions = companyList.map(() =>
+        `SUBSTRING_INDEX(h.AssetCode, '/', 1) = ?` // Tambahkan alias 'h'
+      ).join(' OR ');
+      filterConditions += ` AND (${companyConditions})`;
+      queryParams.push(...companyList);
+    }
+
+    // ✅ Filter berdasarkan CategoryCode
+    if (categoryQuery) {
+      const categoryList = categoryQuery.split(',').map(c => c.trim());
+      const categoryConditions = categoryList.map(() =>
+        `SUBSTRING_INDEX(SUBSTRING_INDEX(h.AssetCode, '/', -2), '-', 1) = ?` // Tambahkan alias 'h'
+      ).join(' OR ');
+      filterConditions += ` AND (${categoryConditions})`;
+      queryParams.push(...categoryList);
+    }
+
+    // ✅ Filter berdasarkan Location
+    if (locationQuery) {
+      const locationList = locationQuery.split(',').map(l => l.trim());
+      const locationConditions = locationList.map(() =>
+        `SUBSTRING_INDEX(SUBSTRING_INDEX(h.AssetCode, '/', 2), '-', -1) = ?` // Tambahkan alias 'h'
+      ).join(' OR ');
+      filterConditions += ` AND (${locationConditions})`;
+      queryParams.push(...locationList);
+    }
+
+    // Query data hasil
+    const dataQuery = `
+      SELECT h.AssetCode, u.Username, a.AssetName
+      FROM tb_stockopname_d_hasil h
+      LEFT JOIN asset a ON h.AssetCode = a.AssetCode
+      LEFT JOIN tb_user u ON h.id_user = u.id_user
+      WHERE ${filterConditions} -- Alias 'h' diterapkan di filterConditions
+      ORDER BY h.DateTimeScan DESC
+      LIMIT ? OFFSET ?
+    `;
+    queryParams.push(limit, offset);
+
+    const [rows] = await pool.query(dataQuery, queryParams);
+
+    // Query total count
+    const countQuery = `
+      SELECT COUNT(*) as total 
+      FROM tb_stockopname_d_hasil h
+      WHERE ${filterConditions} 
+    `;
+    const [countResult] = await pool.query(countQuery, queryParams.slice(0, -2));
+
     const total = countResult[0]?.total || 0;
 
     if (rows.length === 0) {
@@ -67,10 +276,11 @@ router.get('/no-stock-opname/:noso', verifyToken, async (req, res) => {
 
     res.json({
       data: rows,
-      total,                // Jumlah total data
+      total,
       nextOffset: offset + limit,
-      hasMore: offset + limit < total // True jika masih ada data selanjutnya
+      hasMore: offset + limit < total
     });
+
   } catch (error) {
     console.error('Error:', error.message);
     res.status(500).json({ message: 'Internal Server Error' });
@@ -78,7 +288,223 @@ router.get('/no-stock-opname/:noso', verifyToken, async (req, res) => {
 });
 
 
+//CREATE NEW SO
+router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
+  try {
+    const pool = await connectDb();
+    console.log("✅ Terhubung ke MySQL server:", pool.config?.host || "Unknown");
 
+    // Data dari body request (tanpa NoSO)
+    const { Tanggal, IdCompanies, IdCategories, IdLocations } = req.body;
+
+    // Validasi input
+    if (!Tanggal || !IdCompanies || !Array.isArray(IdCompanies) || IdCompanies.length === 0) {
+      return res.status(400).json({ 
+        message: "Tanggal tidak boleh kosong!" 
+      });
+    }
+
+    // Mulai transaction
+    await pool.query("START TRANSACTION");
+
+    try {
+      // 1. Ambil NoSO terakhir
+      const [lastSo] = await pool.query(`
+        SELECT NoSO 
+        FROM tb_stockopname_h 
+        ORDER BY NoSO DESC 
+        LIMIT 1
+      `);
+
+      // 2. Generate NoSO baru
+      let newNoSO;
+      if (lastSo.length === 0) {
+        // Jika tabel kosong, mulai dari SO.0000000001
+        newNoSO = "SO.0000000001";
+      } else {
+        // Ekstrak angka dari NoSO terakhir
+        const lastNumber = parseInt(lastSo[0].NoSO.split('.')[1]);
+        const nextNumber = lastNumber + 1;
+        
+        // Format ke 10 digit dengan leading zeros
+        newNoSO = `SO.${nextNumber.toString().padStart(10, '0')}`;
+      }
+
+      // 3. Insert ke tabel header
+      await pool.query(
+        `INSERT INTO tb_stockopname_h (NoSO, Tanggal) VALUES (?, ?)`,
+        [newNoSO, Tanggal]
+      );
+
+      // 4. Insert ke tabel-tabel detail
+      const insertDetails = async (tableName, columnName, values) => {
+        if (values && values.length > 0) {
+          const insertSql = `
+            INSERT INTO ${tableName} (NoSO, ${columnName}) 
+            VALUES ?
+          `;
+          const formattedValues = values.map(id => [newNoSO, id]);
+          await pool.query(insertSql, [formattedValues]);
+        }
+      };
+
+      await insertDetails('tb_stockopname_dcompany', 'IdCompany', IdCompanies);
+      await insertDetails('tb_stockopname_dcategory', 'IdCategory', IdCategories);
+      await insertDetails('tb_stockopname_dlocation', 'IdLocation', IdLocations);
+
+      // 5. Ambil semua AssetCode dari tabel `asset`
+      let filterConditions = "WHERE created_at < ? AND status = 'active'";
+      const queryParams = [Tanggal];
+
+      if (IdCompanies && IdCompanies.length > 0) {
+        const companyConditions = IdCompanies.map(() =>
+          `SUBSTRING_INDEX(AssetCode, '/', 1) = ?`
+        ).join(' OR ');
+        filterConditions += ` AND (${companyConditions})`;
+        queryParams.push(...IdCompanies);
+      }
+
+      // Filter berdasarkan CategoryCode
+      if (IdCategories && IdCategories.length > 0) {
+        const categoryConditions = IdCategories.map(() =>
+          `SUBSTRING_INDEX(SUBSTRING_INDEX(AssetCode, '/', -2), '-', 1) = ?`
+        ).join(' OR ');
+        filterConditions += ` AND (${categoryConditions})`;
+        queryParams.push(...IdCategories);
+      }
+
+      // Filter berdasarkan Location
+      if (IdLocations && IdLocations.length > 0) {
+        const locationConditions = IdLocations.map(() =>
+          `SUBSTRING_INDEX(SUBSTRING_INDEX(AssetCode, '/', 2), '-', -1) = ?`
+        ).join(' OR ');
+        filterConditions += ` AND (${locationConditions})`;
+        queryParams.push(...IdLocations);
+      }
+
+      const [assets] = await pool.query(
+        `SELECT AssetCode FROM asset ${filterConditions}`,
+        queryParams
+      );
+      
+      console.log('Assets retrieved:', assets);
+
+      // 6. Insert AssetCode ke tabel `tb_stockopname_d`
+      if (assets.length > 0) {
+        const assetInsertSql = `
+          INSERT INTO tb_stockopname_d (NoSO, AssetCode) 
+          VALUES ?
+        `;
+        const assetValues = assets.map(asset => [newNoSO, asset.AssetCode]);
+        await pool.query(assetInsertSql, [assetValues]);
+        console.log('Data successfully inserted into tb_stockopname_d!');
+
+      }
+
+      // Commit transaction
+      await pool.query("COMMIT");
+
+    
+      res.status(201).json({ 
+        message: `Stock Opname berhasil dibuat!`,
+        data: {
+          NoSO: newNoSO,
+          Tanggal: Tanggal,
+          IdCompanies: IdCompanies,
+          IdCategories: IdCategories,
+          IdLocations: IdLocations
+        }
+      });
+
+
+    } catch (error) {
+      await pool.query("ROLLBACK");
+      console.error("❌ Transaction Error:", error);
+      throw error;
+    }
+
+  } catch (error) {
+    console.error("❌ Error:", error);
+    res.status(500).json({ 
+      message: "Internal Server Error", 
+      error: error.message 
+    });
+  }
+});
+
+
+// HAPUS MULTIPLE STOCK OPNAME BERDASARKAN ARRAY NoSO
+router.delete("/no-stock-opname/delete", verifyToken, async (req, res) => {
+  try {
+    const pool = await connectDb();
+    console.log("✅ Terhubung ke MySQL server");
+
+    // Data dari body request (array of NoSO)
+    const { NoSO } = req.body; // Sekarang menerima array
+
+    // Validasi input
+    if (!NoSO || !Array.isArray(NoSO) || NoSO.length === 0) {
+      return res.status(400).json({ 
+        message: "NoSO harus berupa array dan tidak boleh kosong!" 
+      });
+    }
+
+    await pool.query("START TRANSACTION");
+
+    try {
+      // 1. Hapus dari semua tabel detail sekaligus (menggunakan IN clause)
+      const deleteDetails = async (tableName) => {
+        await pool.query(
+          `DELETE FROM ${tableName} WHERE NoSO IN (?)`,
+          [NoSO]
+        );
+      };
+
+      await deleteDetails('tb_stockopname_dcompany');
+      await deleteDetails('tb_stockopname_dcategory');
+      await deleteDetails('tb_stockopname_dlocation');
+      await deleteDetails('tb_stockopname_d');
+      await deleteDetails('tb_stockopname_d_hasil');
+
+
+      // 2. Hapus dari tabel header
+      const [result] = await pool.query(
+        `DELETE FROM tb_stockopname_h WHERE NoSO IN (?)`,
+        [NoSO]
+      );
+
+      if (result.affectedRows === 0) {
+        await pool.query("ROLLBACK");
+        return res.status(404).json({ 
+          message: "Tidak ada data Stock Opname yang ditemukan!" 
+        });
+      }
+
+      await pool.query("COMMIT");
+
+      res.status(200).json({ 
+        message: `${result.affectedRows} data Stock Opname berhasil dihapus!`,
+        data: { deletedNoSO: NoSO }
+      });
+
+    } catch (error) {
+      await pool.query("ROLLBACK");
+      console.error("❌ Transaction Error:", error);
+      throw error;
+    }
+
+  } catch (error) {
+    console.error("❌ Error:", error);
+    res.status(500).json({ 
+      message: "Internal Server Error", 
+      error: error.message 
+    });
+  }
+});
+
+
+
+//SIMPAN HASIL SCAN KE DATABASE
 router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
   try {
     const pool = await connectDb(); // Ambil connection pool
@@ -88,8 +514,8 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
     let { AssetCode } = req.body;
     const Username = req.user?.username ? req.user.username.toUpperCase() : null;
 
-    console.log("Username dari JWT:", Username);
-    console.log("AssetCode sebelum diproses:", AssetCode);
+    // console.log("Username dari JWT:", Username);
+    // console.log("AssetCode sebelum diproses:", AssetCode);
 
     if (!AssetCode || !Username) {
       return res.status(400).json({ message: "AssetCode dan Username wajib diisi" });
@@ -100,18 +526,87 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
 
     if (isUrl) {
       console.log("🔍 AssetCode adalah URL, mengambil data dari halaman...");
-      const extractedAssetCode = await fetchAssetCodeFromPage(AssetCode);
-
-      if (!extractedAssetCode) {
-        return res.status(400).json({ message: "Gagal mengambil AssetCode dari halaman web." });
+      const extractedAssetData = await fetchAssetDataFromPage(AssetCode);
+    
+      if (!extractedAssetData) {
+        return res.status(400).json({ message: "Gagal mengambil data Asset dari halaman web." });
       }
-
-      AssetCode = extractedAssetCode; // Ganti dengan hasil scraping
+    
+      AssetCode = extractedAssetData.assetCode; // Ganti dengan hasil scraping AssetCode
+      AssetName = extractedAssetData.assetName; // Simpan hasil scraping AssetName
+    
+      console.log("✅ AssetCode:", AssetCode);
+      console.log("✅ AssetName:", AssetName);
     } else {
       return res.status(404).json({ message: "AssetCode tidak terdaftar!" });
     }
 
     console.log("Final AssetCode yang akan disimpan:", AssetCode);
+
+        // Pengecekan validasi format dan tabel referensi
+        const companyCode = AssetCode.split('/')[0];
+        const categoryCode = AssetCode.split('/')[1]?.split('-')[0];
+        const locationCode = AssetCode.split('/')[1]?.split('-')[1];
+
+        if (!companyCode || !categoryCode || !locationCode) {
+          return res.status(400).json({ message: "Format AssetCode tidak valid!" });
+        }
+
+        // console.log("Extracted CompanyCode:", companyCode);
+        // console.log("Extracted CategoryCode:", categoryCode);
+        // console.log("Extracted LocationCode:", locationCode);
+
+            // Validasi terhadap tabel referensi
+    const validationQuery = `
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM tb_stockopname_dcompany
+        WHERE NoSO = ? AND IdCompany = ?
+      ) AS isValidCompany,
+      EXISTS (
+        SELECT 1
+        FROM tb_stockopname_dcategory
+        WHERE NoSO = ? AND IdCategory = ?
+      ) AS isValidCategory,
+      EXISTS (
+        SELECT 1
+        FROM tb_stockopname_dlocation
+        WHERE NoSO = ? AND IdLocation = ?
+      ) AS isValidLocation
+  `;
+
+  const [validationResult] = await pool.query(validationQuery, [
+    noso,
+    companyCode,
+    noso,
+    categoryCode,
+    noso,
+    locationCode,
+  ]);
+
+  const { isValidCompany, isValidCategory, isValidLocation } = validationResult[0];
+
+  if (!isValidCompany || !isValidCategory || !isValidLocation) {
+    // console.log("❌ Validasi gagal:", { isValidCompany, isValidCategory, isValidLocation });
+  
+    const invalidFields = [];
+    if (!isValidCompany) invalidFields.push("Company");
+    if (!isValidCategory) invalidFields.push("Category");
+    if (!isValidLocation) invalidFields.push("Location");
+  
+    return res.status(409).json({
+      message: `${invalidFields.join(', ')} tidak sesuai!`,
+      details: {
+        isValidCompany,
+        isValidCategory,
+        isValidLocation,
+      },
+    });
+  }
+
+  // console.log("✅ Validasi berhasil, melanjutkan ke pengecekan duplikasi...");
+    
 
     const checkDuplicateSql = `
     SELECT COUNT(*) AS count 
@@ -129,14 +624,37 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
       });
     }
 
+    const userQuery = "SELECT id_user FROM tb_user WHERE username = ?";
+    const [userResult] = await pool.query(userQuery, [Username]);
+
+    if (userResult.length === 0) {
+      return res.status(404).json({ message: "id_user tidak ditemukan di sistem." });
+    }
+
+    // Ambil id_user langsung dari hasil query
+    const id_user = userResult[0].id_user;
+
     const sql = `
       INSERT INTO tb_stockopname_d_hasil (NoSO, AssetCode, Username, DateTimeScan) 
       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
     `;
 
-    const [result] = await pool.query(sql, [noso, AssetCode, Username]);
+    const [result] = await pool.query(sql, [noso, AssetCode, id_user]);
 
     res.status(201).json({ message: `Asset ${AssetCode} berhasil ditambahkan!` });
+    
+    // Broadcast ke semua client yang subscribe ke NoSO ini
+    broadcast({
+      type: 'NEW_ASSET',
+      data: {
+        NoSO: noso,
+        AssetCode: AssetCode,
+        AssetName: AssetName,
+        Username: Username, 
+        DateTimeScan: new Date().toISOString()
+        // Tambahkan field lain yang diperlukan frontend
+      }
+    });
 
   } catch (error) {
     console.error("❌ Error:", error);
@@ -145,21 +663,27 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
 });
 
 
-async function fetchAssetCodeFromPage(url) {
+
+
+//Fungsi untuk fetch AssetCode dan AssetName berdasarkan QR Code
+async function fetchAssetDataFromPage(url) {
   try {
     const response = await axios.get(url);
     const $ = cheerio.load(response.data);
 
-    // Ambil teks dari elemen yang mengandung AssetCode (ubah selector sesuai dengan struktur HTML)
+    // Ambil AssetCode dari elemen yang sesuai
     const assetCode = $("#AssetCodeTable").text().trim() || $("span.asset-code").text().trim();
 
-    if (!assetCode) {
-      throw new Error("AssetCode tidak ditemukan dalam halaman web.");
+    // Ambil AssetName dari elemen yang sesuai
+    const assetName = $("#AssetNameTable").text().trim() || $("span.asset-name").text().trim();
+
+    if (!assetCode || !assetName) {
+      throw new Error("AssetCode atau AssetName tidak ditemukan dalam halaman web.");
     }
 
-    return assetCode;
+    return { assetCode, assetName };
   } catch (error) {
-    console.error("❌ Error mengambil AssetCode dari halaman:", error.message);
+    console.error("❌ Error mengambil data Asset dari halaman:", error.message);
     return null;
   }
 }
