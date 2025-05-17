@@ -6,6 +6,8 @@ const router = express.Router();
 const axios = require("axios");
 const cheerio = require("cheerio");
 const { broadcast } = require('../websocket'); // Import dari root
+const path = require('path'); // Pastikan path diimpor
+const fs = require('fs');
 
 
 // Helper function to format dates using Moment.js
@@ -66,6 +68,7 @@ router.get('/no-stock-opname', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Internal Server Error' });
   }
 });
+
 
 
 // Route to get Stock Opname Number
@@ -155,10 +158,12 @@ router.get('/no-stock-opname-current/:noso', verifyToken, async (req, res) => {
 
     // Query data dengan LEFT JOIN ke tabel hasil
     const dataQuery = `
-      SELECT d.AssetCode, a.AssetName
+      SELECT d.AssetCode, a.AssetName, d.HasNotBeenPrinted, d.Image, s.status, u.username
       FROM tb_stockopname_d d
       LEFT JOIN tb_stockopname_d_hasil h ON d.AssetCode = h.AssetCode AND d.NoSO = h.NoSO
       LEFT JOIN asset a ON d.AssetCode = a.AssetCode
+      LEFT JOIN tb_so_status s ON d.id_status = s.id_status
+      LEFT JOIN tb_user u ON d.id_user = u.id_user
       WHERE ${filterConditions}
       ORDER BY d.AssetCode DESC
       LIMIT ? OFFSET ?
@@ -199,6 +204,98 @@ router.get('/no-stock-opname-current/:noso', verifyToken, async (req, res) => {
     });
   }
 });
+
+//UPDATE ASSET DETAIL PADA STOCKOPNAME_D
+router.put('/update-stock-opname', verifyToken, async (req, res) => {
+  try {
+    await connectDb();
+
+    const {
+      noSO,
+      assetCode,
+      image,
+      idStatus,
+      isUpdateValid
+    } = req.body;
+
+    const idUser = req.user.id_user;
+
+    console.log("🟡 ID User dari JWT:", idUser);
+
+    // Validasi input
+    if (!noSO || !assetCode) {
+      return res.status(400).json({ message: 'NoSO dan AssetCode wajib diisi' });
+    }
+
+    let query = '';
+    let values = [];
+
+    if (isUpdateValid) {
+      // Update data seperti biasa
+      query = `
+        UPDATE tb_stockopname_d 
+        SET 
+          HasNotBeenPrinted = 1, 
+          Image = ?, 
+          id_status = ?, 
+          id_user = ? 
+        WHERE NoSO = ? AND AssetCode = ?
+      `;
+      values = [
+        image ?? null,
+        idStatus ?? null,
+        idUser,
+        noSO,
+        assetCode
+      ];
+    } else {
+      // Hapus gambar dari file system jika ada
+      const imagePath = path.join(__dirname, '..', 'storage', 'uploads', image);
+    
+      try {
+        // Cek apakah file gambar ada, lalu hapus
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath);  // Hapus file
+          console.log(`✅ File gambar ${image} berhasil dihapus`);
+        } else {
+          console.log(`⚠️ File gambar ${image} tidak ditemukan`);
+        }
+      } catch (err) {
+        console.error(`❌ Gagal menghapus file gambar: ${err.message}`);
+        // Lanjutkan proses meskipun gagal menghapus file
+      }
+    
+      // Reset data
+      query = `
+        UPDATE tb_stockopname_d 
+        SET 
+          HasNotBeenPrinted = 0, 
+          Image = NULL, 
+          id_status = NULL, 
+          id_user = NULL 
+        WHERE NoSO = ? AND AssetCode = ?
+      `;
+      values = [noSO, assetCode];
+    }
+    
+
+    const [result] = await pool.query(query, values);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Data tidak ditemukan atau tidak berubah' });
+    }
+
+    res.json({ message: 'Data berhasil diupdate' });
+
+  } catch (error) {
+    console.error('Update error:', error.message);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+  }
+});
+
+
+
+
 
 
 // Route to get Asset data based on NoSO
@@ -252,7 +349,7 @@ router.get('/no-stock-opname/:noso', verifyToken, async (req, res) => {
       FROM tb_stockopname_d_hasil h
       LEFT JOIN asset a ON h.AssetCode = a.AssetCode
       LEFT JOIN tb_user u ON h.id_user = u.id_user
-      WHERE ${filterConditions} -- Alias 'h' diterapkan di filterConditions
+      WHERE ${filterConditions} 
       ORDER BY h.DateTimeScan DESC
       LIMIT ? OFFSET ?
     `;
@@ -387,7 +484,7 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
         queryParams
       );
       
-      console.log('Assets retrieved:', assets);
+      // console.log('Assets retrieved:', assets);
 
       // 6. Insert AssetCode ke tabel `tb_stockopname_d`
       if (assets.length > 0) {
@@ -416,7 +513,6 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
         }
       });
 
-
     } catch (error) {
       await pool.query("ROLLBACK");
       console.error("❌ Transaction Error:", error);
@@ -439,25 +535,18 @@ router.delete("/no-stock-opname/delete", verifyToken, async (req, res) => {
     const pool = await connectDb();
     console.log("✅ Terhubung ke MySQL server");
 
-    // Data dari body request (array of NoSO)
-    const { NoSO } = req.body; // Sekarang menerima array
+    const { NoSO } = req.body;
 
-    // Validasi input
     if (!NoSO || !Array.isArray(NoSO) || NoSO.length === 0) {
-      return res.status(400).json({ 
-        message: "NoSO harus berupa array dan tidak boleh kosong!" 
-      });
+      return res.status(400).json({ message: "NoSO harus berupa array dan tidak boleh kosong!" });
     }
 
     await pool.query("START TRANSACTION");
 
     try {
-      // 1. Hapus dari semua tabel detail sekaligus (menggunakan IN clause)
+      // Hapus detail di DB
       const deleteDetails = async (tableName) => {
-        await pool.query(
-          `DELETE FROM ${tableName} WHERE NoSO IN (?)`,
-          [NoSO]
-        );
+        await pool.query(`DELETE FROM ${tableName} WHERE NoSO IN (?)`, [NoSO]);
       };
 
       await deleteDetails('tb_stockopname_dcompany');
@@ -465,20 +554,33 @@ router.delete("/no-stock-opname/delete", verifyToken, async (req, res) => {
       await deleteDetails('tb_stockopname_dlocation');
       await deleteDetails('tb_stockopname_d');
       await deleteDetails('tb_stockopname_d_hasil');
+      await deleteDetails('tb_stockopname_non_assets');
 
-
-      // 2. Hapus dari tabel header
-      const [result] = await pool.query(
-        `DELETE FROM tb_stockopname_h WHERE NoSO IN (?)`,
-        [NoSO]
-      );
-
+      // Hapus header
+      const [result] = await pool.query(`DELETE FROM tb_stockopname_h WHERE NoSO IN (?)`, [NoSO]);
       if (result.affectedRows === 0) {
         await pool.query("ROLLBACK");
-        return res.status(404).json({ 
-          message: "Tidak ada data Stock Opname yang ditemukan!" 
-        });
+        return res.status(404).json({ message: "Tidak ada data Stock Opname yang ditemukan!" });
       }
+
+      const uploadDir = path.join(__dirname, '..', 'storage', 'uploads');
+
+      // HAPUS FILE GAMBAR SESUAI NoSO
+      NoSO.forEach(noSO => {
+        const safeNoSO = noSO.replace(/\./g, '_'); // SO.000001 => SO_000001
+        // Baca semua file di folder upload
+        const files = fs.readdirSync(uploadDir);
+        files.forEach(file => {
+          // Jika file namanya diawali safeNoSO, hapus file tersebut
+          if (file.startsWith(safeNoSO + '_')) {
+            const filePath = path.join(uploadDir, file);
+            if (fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+              console.log(`File gambar dihapus: ${file}`);
+            }
+          }
+        });
+      });
 
       await pool.query("COMMIT");
 
@@ -504,6 +606,207 @@ router.delete("/no-stock-opname/delete", verifyToken, async (req, res) => {
 
 
 
+
+//ITEM NO ASSET
+router.post("/no-asset-stock-opname/create", verifyToken, async (req, res) => {
+  try {
+    const pool = await connectDb();
+    console.log("✅ Terhubung ke MySQL server:", pool.config?.host || "Unknown");
+
+    const { NoSO, image, location_code, non_asset_name, remark } = req.body;
+
+    // Validasi input
+    if (!NoSO || !image) {
+      return res.status(400).json({
+        message: "NoSO dan image tidak boleh kosong!"
+      });
+    }
+
+    const insertSql = `
+      INSERT INTO tb_stockopname_non_assets (NoSO, image, location_code, non_asset_name, remark)
+      VALUES (?, ?, ?, ?, ?)
+    `;
+
+    const [result] = await pool.query(insertSql, [NoSO, image, location_code, non_asset_name, remark || null]);
+
+    res.status(201).json({
+      message: "Data berhasil disimpan ke tb_stockopname_non_assets!",
+      data: {
+        non_asset_id: result.insertId,
+        NoSO,
+        image,
+        location_code,
+        non_asset_name: non_asset_name || null,
+        remark: remark || null
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Error saat menyimpan ke tb_stockopname_non_assets:", error);
+    res.status(500).json({
+      message: "Internal Server Error",
+      error: error.message
+    });
+  }
+});
+
+
+router.get("/no-asset-stock-opname/:noso", async (req, res) => {
+  try {
+    const { noso } = req.params;
+
+    const pool = await connectDb();
+    const [rows] = await pool.query(
+      "SELECT * FROM tb_stockopname_non_assets WHERE NoSO = ?",
+      [noso]
+    );
+
+    res.status(200).json({
+      message: `Data dengan noso ${noso} berhasil diambil.`,
+      data: rows
+    });
+
+  } catch (error) {
+    console.error("❌ Error:", error);
+    res.status(500).json({
+      message: "Internal Server Error",
+      error: error.message
+    });
+  }
+});
+
+
+//DELETE ITEM NO ASSET
+router.post("/no-asset-stock-opname/delete", verifyToken, async (req, res) => {
+  try {
+    const pool = await connectDb();
+    const { idAssets } = req.body;
+
+    if (!Array.isArray(idAssets) || idAssets.length === 0) {
+      return res.status(400).json({
+        message: "idAssets harus berupa array dan tidak boleh kosong!"
+      });
+    }
+
+    // Query untuk mengambil gambar berdasarkan idAssets
+    const getImagesSql = `
+      SELECT image FROM tb_stockopname_non_assets WHERE non_asset_id IN (?)
+    `;
+    const [images] = await pool.query(getImagesSql, [idAssets]);
+
+    // Hapus gambar-gambar dari file system
+    images.forEach(image => {
+      if (image && image.image) {
+        const imagePath = path.join(__dirname, '..', 'storage', 'uploads', image.image);
+        // Cek apakah file gambar ada, lalu hapus
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath);  // Hapus file
+        }
+      }
+    });
+
+    // Hapus data dari tabel setelah file gambar berhasil dihapus
+    const deleteSql = `
+      DELETE FROM tb_stockopname_non_assets
+      WHERE non_asset_id IN (?)
+    `;
+    const [result] = await pool.query(deleteSql, [idAssets]);
+
+    res.status(200).json({
+      message: `${result.affectedRows} item berhasil dihapus.`,
+      deletedCount: result.affectedRows
+    });
+
+  } catch (error) {
+    console.error("❌ Error saat menghapus data:", error);
+    res.status(500).json({
+      message: "Gagal menghapus data",
+      error: error.message
+    });
+  }
+});
+
+
+
+// UPDATE Non ASSET (TANPA NoSO)
+router.put("/no-asset-stock-opname/update/:non_asset_id", verifyToken, async (req, res) => {
+  try {
+    const pool = await connectDb();
+    const { non_asset_id } = req.params;
+    const { image, location_code, non_asset_name, remark } = req.body;
+
+    // Validasi ID harus ada
+    if (!non_asset_id) {
+      return res.status(400).json({
+        message: "ID non asset harus disertakan!"
+      });
+    }
+
+    // Validasi minimal image atau remark harus ada
+    if (image === undefined && location_code === undefined && non_asset_name === undefined && remark === undefined) {
+      return res.status(400).json({
+        message: "Minimal image atau non asset name atau remark harus diisi untuk update!"
+      });
+    }
+
+    // Cek apakah data exist
+    const [rows] = await pool.query(
+      `SELECT non_asset_id FROM tb_stockopname_non_assets WHERE non_asset_id = ?`,
+      [non_asset_id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        message: `Data dengan ID ${non_asset_id} tidak ditemukan!`
+      });
+    }
+
+    // Update hanya image dan remark
+    const updateSql = `
+      UPDATE tb_stockopname_non_assets 
+      SET 
+        image = IFNULL(?, image),
+        location_code = ?,
+        non_asset_name = ?,
+        remark = ?
+      WHERE non_asset_id = ?
+    `;
+
+    await pool.query(updateSql, [
+      image || null,  // Jika image tidak diisi, gunakan nilai yang ada
+      location_code || null,
+      non_asset_name || null, 
+      remark || null, // Jika remark tidak diisi, set ke null
+      non_asset_id
+    ]);
+
+    // Ambil data terupdate untuk response
+    const [updatedData] = await pool.query(
+      `SELECT non_asset_id, NoSO, image, non_asset_name, remark 
+       FROM tb_stockopname_non_assets 
+       WHERE non_asset_id = ?`,
+      [non_asset_id]
+    );
+
+    res.status(200).json({
+      message: "Image dan remark berhasil diupdate!",
+      data: updatedData[0]
+    });
+
+  } catch (error) {
+    console.error("Error updating data:", error);
+    res.status(500).json({
+      message: "Internal Server Error",
+      error: error.message
+    });
+  }
+});
+
+
+
+
+
+
 //SIMPAN HASIL SCAN KE DATABASE
 router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
   try {
@@ -513,8 +816,9 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
     const { noso } = req.params;
     let { AssetCode } = req.body;
     const Username = req.user?.username ? req.user.username.toUpperCase() : null;
+    const idUser = req.user.id_user;  
 
-    // console.log("Username dari JWT:", Username);
+    console.log("Username dari JWT:", idUser);
     // console.log("AssetCode sebelum diproses:", AssetCode);
 
     if (!AssetCode || !Username) {
@@ -535,8 +839,6 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
       AssetCode = extractedAssetData.assetCode; // Ganti dengan hasil scraping AssetCode
       AssetName = extractedAssetData.assetName; // Simpan hasil scraping AssetName
     
-      console.log("✅ AssetCode:", AssetCode);
-      console.log("✅ AssetName:", AssetName);
     } else {
       return res.status(404).json({ message: "AssetCode tidak terdaftar!" });
     }
@@ -552,11 +854,7 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
           return res.status(400).json({ message: "Format AssetCode tidak valid!" });
         }
 
-        // console.log("Extracted CompanyCode:", companyCode);
-        // console.log("Extracted CategoryCode:", categoryCode);
-        // console.log("Extracted LocationCode:", locationCode);
-
-            // Validasi terhadap tabel referensi
+    // Validasi terhadap tabel referensi
     const validationQuery = `
     SELECT
       EXISTS (
@@ -603,10 +901,7 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
         isValidLocation,
       },
     });
-  }
-
-  // console.log("✅ Validasi berhasil, melanjutkan ke pengecekan duplikasi...");
-    
+  }    
 
     const checkDuplicateSql = `
     SELECT COUNT(*) AS count 
@@ -624,22 +919,60 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
       });
     }
 
-    const userQuery = "SELECT id_user FROM tb_user WHERE username = ?";
-    const [userResult] = await pool.query(userQuery, [Username]);
 
-    if (userResult.length === 0) {
-      return res.status(404).json({ message: "id_user tidak ditemukan di sistem." });
+
+      // Pengecekan data di tb_stockopname_d sebelum insert
+      const checkMasterDataSql = `
+      SELECT NoSO, AssetCode, HasNotBeenPrinted, Image, id_status, id_user 
+      FROM tb_stockopname_d 
+      WHERE NoSO = ? AND AssetCode = ?
+    `;
+
+    const [masterDataResult] = await pool.query(checkMasterDataSql, [noso, AssetCode]);
+
+    if (masterDataResult.length > 0) {
+      const masterData = masterDataResult[0];
+      
+      // Hapus gambar dari file system jika ada
+      if (masterData.Image) {
+        const imagePath = path.join(__dirname, '..', 'storage', 'uploads', masterData.Image);
+        
+        try {
+          // Cek apakah file gambar ada, lalu hapus
+          if (fs.existsSync(imagePath)) {
+            fs.unlinkSync(imagePath);  // Hapus file
+            console.log(`✅ File gambar ${masterData.Image} berhasil dihapus`);
+          } else {
+            console.log(`⚠️ File gambar ${masterData.Image} tidak ditemukan`);
+          }
+        } catch (err) {
+          console.error(`❌ Gagal menghapus file gambar: ${err.message}`);
+          // Lanjutkan proses meskipun gagal menghapus file
+        }
+      }
+
+      // Update data di tb_stockopname_d
+      const updateMasterDataSql = `
+        UPDATE tb_stockopname_d 
+        SET 
+          HasNotBeenPrinted = 0,
+          Image = NULL,
+          id_status = NULL,
+          id_user = ""
+        WHERE NoSO = ? AND AssetCode = ?
+      `;
+      
+      await pool.query(updateMasterDataSql, [noso, AssetCode]);
+      console.log(`✅ Data master untuk AssetCode ${AssetCode} telah diupdate`);
     }
 
-    // Ambil id_user langsung dari hasil query
-    const id_user = userResult[0].id_user;
 
     const sql = `
-      INSERT INTO tb_stockopname_d_hasil (NoSO, AssetCode, Username, DateTimeScan) 
+      INSERT INTO tb_stockopname_d_hasil (NoSO, AssetCode, id_user, DateTimeScan) 
       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
     `;
 
-    const [result] = await pool.query(sql, [noso, AssetCode, id_user]);
+    const [result] = await pool.query(sql, [noso, AssetCode, idUser]);
 
     res.status(201).json({ message: `Asset ${AssetCode} berhasil ditambahkan!` });
     

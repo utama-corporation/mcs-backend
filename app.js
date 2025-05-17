@@ -8,6 +8,9 @@ const { wss } = require('./websocket'); // Import dari root
 const authRoutes = require('./routes/authRoutes');  // Rute untuk autentikasi
 const stockOpnameRoutes = require('./routes/stockOpnameRoutes');  // Rute untuk autentikasi
 const masterRoutes = require('./routes/masterRoutes');  // Rute untuk autentikasi
+const uploadImgRoutes = require('./routes/uploadImgRoutes');
+const laporanRoutes = require('./routes/laporanRoutes');
+
 
 
 const app = express();
@@ -47,6 +50,11 @@ app.use('/api', authRoutes);  // Rute autentikasi
 app.use('/api', stockOpnameRoutes);  // Rute autentikasi
 
 app.use('/api', masterRoutes);  
+
+app.use('/api', uploadImgRoutes);
+
+app.use('/api', laporanRoutes);
+
 
 
 // Panggil connectDb sebelum server.listen

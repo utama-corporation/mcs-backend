@@ -25,7 +25,7 @@ router.post('/login', async (req, res) => {
 
     // Query the database for the user with the hashed password
     const [rows] = await pool.query(
-      'SELECT username, password FROM tb_user WHERE username = ? AND password = ?',
+      'SELECT id_user, username, password FROM tb_user WHERE username = ? AND password = ?',
       [username, hashedPassword]
     );
 
@@ -34,7 +34,7 @@ router.post('/login', async (req, res) => {
       console.log('User found:', user);
 
             // Membuat JWT token
-            const payload = { username };  // Payload hanya berisi username
+            const payload = { id_user: user.id_user, username: user.username };  // Payload hanya berisi username
             const secretKey = process.env.SECRET_KEY;  
       
             // Membuat token yang berlaku selama 1 jam
@@ -43,7 +43,11 @@ router.post('/login', async (req, res) => {
       res.status(200).json({
         success: true,
         message: 'Login berhasil',
-        token: token
+        token: token,
+        user: {
+          id_user: user.id_user,
+          username: user.username
+        }
       });
     } else {
       console.log('Invalid credentials');
