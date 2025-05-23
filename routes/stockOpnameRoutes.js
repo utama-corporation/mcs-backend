@@ -8,11 +8,12 @@ const cheerio = require("cheerio");
 const { broadcast } = require('../websocket'); // Import dari root
 const path = require('path'); // Pastikan path diimpor
 const fs = require('fs');
-
+require('moment/locale/id');
+moment.locale('id'); // Set ke bahasa Indonesia
 
 // Helper function to format dates using Moment.js
 const formatDate = (date) => {
-  return moment(date).format('DD MMM YYYY');
+  return moment(date).format('DD MMMM YYYY');
 };
 
 
@@ -20,7 +21,7 @@ const formatDate = (date) => {
 router.get('/no-stock-opname', verifyToken, async (req, res) => {
   try {
     // Query the main table to get NoSO and Tanggal
-    const [rows] = await pool.query('SELECT NoSO, Tanggal FROM tb_stockopname_h');
+    const [rows] = await pool.query('SELECT NoSO, Tanggal, IsBOM FROM tb_stockopname_h');
 
     // If no records are found, return 404 error
     if (rows.length === 0) {
@@ -30,7 +31,7 @@ router.get('/no-stock-opname', verifyToken, async (req, res) => {
     // Process each NoSO to get related companies, categories, and locations
     const result = await Promise.all(
       rows.map(async (item) => {
-        const { NoSO, Tanggal } = item;
+        const { NoSO, Tanggal, IsBOM } = item;
 
         // Query to get related companies for the current NoSO
         const [companies] = await pool.query(
@@ -54,6 +55,7 @@ router.get('/no-stock-opname', verifyToken, async (req, res) => {
         return {
           NoSO,
           Tanggal: formatDate(Tanggal), // Format date if necessary
+          IsBOM: IsBOM,
           companies: companies.map((c) => c.IdCompany),
           categories: categories.map((c) => c.IdCategory),
           locations: locations.map((l) => l.IdLocation),
@@ -392,7 +394,7 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
     console.log("✅ Terhubung ke MySQL server:", pool.config?.host || "Unknown");
 
     // Data dari body request (tanpa NoSO)
-    const { Tanggal, IdCompanies, IdCategories, IdLocations } = req.body;
+    const { Tanggal, IdCompanies, IdCategories, IdLocations, IsBOM } = req.body;
 
     // Validasi input
     if (!Tanggal || !IdCompanies || !Array.isArray(IdCompanies) || IdCompanies.length === 0) {
@@ -429,8 +431,8 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
 
       // 3. Insert ke tabel header
       await pool.query(
-        `INSERT INTO tb_stockopname_h (NoSO, Tanggal) VALUES (?, ?)`,
-        [newNoSO, Tanggal]
+        `INSERT INTO tb_stockopname_h (NoSO, Tanggal, IsBOM) VALUES (?, ?, ?)`,
+        [newNoSO, Tanggal, IsBOM]
       );
 
       // 4. Insert ke tabel-tabel detail
@@ -484,18 +486,40 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
         queryParams
       );
       
-      // console.log('Assets retrieved:', assets);
 
       // 6. Insert AssetCode ke tabel `tb_stockopname_d`
       if (assets.length > 0) {
-        const assetInsertSql = `
-          INSERT INTO tb_stockopname_d (NoSO, AssetCode) 
-          VALUES ?
-        `;
-        const assetValues = assets.map(asset => [newNoSO, asset.AssetCode]);
-        await pool.query(assetInsertSql, [assetValues]);
-        console.log('Data successfully inserted into tb_stockopname_d!');
+        console.log("✅ Nilai IsBOM:", IsBOM); // ⬅️ Log nilai IsBOM
 
+        let finalAssets = assets;
+
+        if (IsBOM) {
+          console.log("🔍 IsBOM aktif, filter asset berdasarkan tb_parts_bom...");
+
+          // Ambil daftar AssetCode yang ada di tb_parts_bom
+          const [bomAssets] = await pool.query(
+            `SELECT AssetCode FROM tb_parts_bom WHERE AssetCode IN (?)`,
+            [assets.map(asset => asset.AssetCode)]
+          );
+
+          const bomAssetCodes = new Set(bomAssets.map(item => item.AssetCode));
+
+          // Filter hanya AssetCode yang ada di bomAssetCodes
+          finalAssets = assets.filter(asset => bomAssetCodes.has(asset.AssetCode));
+          console.log("🧾 AssetCode yang lolos filter BOM:", finalAssets.map(a => a.AssetCode));
+        }
+
+        if (finalAssets.length > 0) {
+          const assetInsertSql = `
+            INSERT INTO tb_stockopname_d (NoSO, AssetCode) 
+            VALUES ?
+          `;
+          const assetValues = finalAssets.map(asset => [newNoSO, asset.AssetCode]);
+          await pool.query(assetInsertSql, [assetValues]);
+          console.log('✅ Data successfully inserted into tb_stockopname_d!');
+        } else {
+          console.log('⚠️ Tidak ada AssetCode yang cocok dengan BOM. Tidak ada data yang diinsert ke tb_stockopname_d.');
+        }
       }
 
       // Commit transaction
@@ -509,7 +533,8 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
           Tanggal: Tanggal,
           IdCompanies: IdCompanies,
           IdCategories: IdCategories,
-          IdLocations: IdLocations
+          IdLocations: IdLocations,
+          IsBOM: IsBOM,
         }
       });
 
@@ -555,6 +580,8 @@ router.delete("/no-stock-opname/delete", verifyToken, async (req, res) => {
       await deleteDetails('tb_stockopname_d');
       await deleteDetails('tb_stockopname_d_hasil');
       await deleteDetails('tb_stockopname_non_assets');
+      await deleteDetails('tb_stockopname_hasil_bom');
+
 
       // Hapus header
       const [result] = await pool.query(`DELETE FROM tb_stockopname_h WHERE NoSO IN (?)`, [NoSO]);
@@ -808,150 +835,160 @@ router.put("/no-asset-stock-opname/update/:non_asset_id", verifyToken, async (re
 
 
 //SIMPAN HASIL SCAN KE DATABASE
-router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
+router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
   try {
-    const pool = await connectDb(); // Ambil connection pool
-    console.log("✅ Terhubung ke MySQL server:", pool.config?.host || "Unknown");
-
+    const pool = await connectDb();
     const { noso } = req.params;
     let { AssetCode } = req.body;
-    const Username = req.user?.username ? req.user.username.toUpperCase() : null;
-    const idUser = req.user.id_user;  
-
-    console.log("Username dari JWT:", idUser);
-    // console.log("AssetCode sebelum diproses:", AssetCode);
+    const Username = req.user?.username?.toUpperCase() || null;
 
     if (!AssetCode || !Username) {
       return res.status(400).json({ message: "AssetCode dan Username wajib diisi" });
     }
 
-    // Cek apakah AssetCode berbentuk URL
-    const isUrl = AssetCode.startsWith("http://") || AssetCode.startsWith("https://");
+    // Default response yang ringkas
+    const responsePayload = {
+      message: "",
+      status: "OK",
+      data: {
+        assetCode: null,
+        assetName: null,
+        requiresChecklist: false,
+        parts: [],
+      }
+    };
 
+    // Handle jika AssetCode adalah URL
+    const isUrl = AssetCode.startsWith("http://") || AssetCode.startsWith("https://");
     if (isUrl) {
-      console.log("🔍 AssetCode adalah URL, mengambil data dari halaman...");
-      const extractedAssetData = await fetchAssetDataFromPage(AssetCode);
-    
-      if (!extractedAssetData) {
+      const extracted = await fetchAssetDataFromPage(AssetCode);
+      if (!extracted) {
         return res.status(400).json({ message: "Gagal mengambil data Asset dari halaman web." });
       }
-    
-      AssetCode = extractedAssetData.assetCode; // Ganti dengan hasil scraping AssetCode
-      AssetName = extractedAssetData.assetName; // Simpan hasil scraping AssetName
-    
+      AssetCode = extracted.assetCode;
+      responsePayload.data.assetCode = extracted.assetCode;
+      responsePayload.data.assetName = extracted.assetName;
     } else {
       return res.status(404).json({ message: "AssetCode tidak terdaftar!" });
     }
 
-    console.log("Final AssetCode yang akan disimpan:", AssetCode);
+    // Parsing kode
+    const companyCode = AssetCode.split('/')[0];
+    const categoryCode = AssetCode.split('/')[1]?.split('-')[0];
+    const locationCode = AssetCode.split('/')[1]?.split('-')[1];
 
-        // Pengecekan validasi format dan tabel referensi
-        const companyCode = AssetCode.split('/')[0];
-        const categoryCode = AssetCode.split('/')[1]?.split('-')[0];
-        const locationCode = AssetCode.split('/')[1]?.split('-')[1];
-
-        if (!companyCode || !categoryCode || !locationCode) {
-          return res.status(400).json({ message: "Format AssetCode tidak valid!" });
-        }
-
-    // Validasi terhadap tabel referensi
-    const validationQuery = `
-    SELECT
-      EXISTS (
-        SELECT 1
-        FROM tb_stockopname_dcompany
-        WHERE NoSO = ? AND IdCompany = ?
-      ) AS isValidCompany,
-      EXISTS (
-        SELECT 1
-        FROM tb_stockopname_dcategory
-        WHERE NoSO = ? AND IdCategory = ?
-      ) AS isValidCategory,
-      EXISTS (
-        SELECT 1
-        FROM tb_stockopname_dlocation
-        WHERE NoSO = ? AND IdLocation = ?
-      ) AS isValidLocation
-  `;
-
-  const [validationResult] = await pool.query(validationQuery, [
-    noso,
-    companyCode,
-    noso,
-    categoryCode,
-    noso,
-    locationCode,
-  ]);
-
-  const { isValidCompany, isValidCategory, isValidLocation } = validationResult[0];
-
-  if (!isValidCompany || !isValidCategory || !isValidLocation) {
-    // console.log("❌ Validasi gagal:", { isValidCompany, isValidCategory, isValidLocation });
-  
-    const invalidFields = [];
-    if (!isValidCompany) invalidFields.push("Company");
-    if (!isValidCategory) invalidFields.push("Category");
-    if (!isValidLocation) invalidFields.push("Location");
-  
-    return res.status(409).json({
-      message: `${invalidFields.join(', ')} tidak sesuai!`,
-      details: {
-        isValidCompany,
-        isValidCategory,
-        isValidLocation,
-      },
-    });
-  }    
-
-    const checkDuplicateSql = `
-    SELECT COUNT(*) AS count 
-    FROM tb_stockopname_d_hasil 
-    WHERE NoSO = ? AND AssetCode = ?
-  `;
-  
-    const [duplicateResult] = await pool.query(checkDuplicateSql, [noso, AssetCode]);
-    const isDuplicate = duplicateResult[0].count > 0;
-
-    if (isDuplicate) {
-      console.log(`AssetCode ${AssetCode} sudah ada untuk NoSO ${noso}`);
-      return res.status(409).json({ 
-        message: `Asset ${AssetCode} telah discan sebelumnya!`,
-      });
+    if (!companyCode || !categoryCode || !locationCode) {
+      responsePayload.status = "FAILED";
+      responsePayload.message = "Format AssetCode tidak valid";
+      return res.status(400).json(responsePayload);
     }
 
+    // Validasi referensi (tetap cek, tapi tidak kirim ke client)
+    const validationQuery = `
+      SELECT
+        EXISTS (SELECT 1 FROM tb_stockopname_dcompany WHERE NoSO = ? AND IdCompany = ?) AS isValidCompany,
+        EXISTS (SELECT 1 FROM tb_stockopname_dcategory WHERE NoSO = ? AND IdCategory = ?) AS isValidCategory,
+        EXISTS (SELECT 1 FROM tb_stockopname_dlocation WHERE NoSO = ? AND IdLocation = ?) AS isValidLocation
+    `;
+    const [validationResult] = await pool.query(validationQuery, [
+      noso, companyCode,
+      noso, categoryCode,
+      noso, locationCode
+    ]);
+    const validation = validationResult[0];
+
+    if (!validation.isValidCompany || !validation.isValidCategory || !validation.isValidLocation) {
+      responsePayload.status = "FAILED";
+      responsePayload.message = "AssetCode tidak valid!";
+      return res.status(400).json(responsePayload);
+    }
+
+    // Cek duplikat, jika duplikat kirim status DUPLICATE dengan pesan
+    const [duplicateResult] = await pool.query(
+      `SELECT COUNT(*) AS count FROM tb_stockopname_d_hasil WHERE NoSO = ? AND AssetCode = ?`,
+      [noso, AssetCode]
+    );
+    if (duplicateResult[0].count > 0) {
+      responsePayload.message = `Asset ${AssetCode} telah discan sebelumnya!`;
+      responsePayload.status = "FAILED";
+      return res.status(409).json(responsePayload);
+    }
+
+    //CHECK APAKAH ISBOM
+    const [soHeaderResult] = await pool.query(
+      `SELECT IsBOM FROM tb_stockopname_h WHERE NoSO = ? LIMIT 1`, [noso]
+    );
+    
+    const isBOM = soHeaderResult[0]?.IsBOM === 1;
+
+    // Cek parts jika kategori IV
+    if (isBOM) {
+      const [partsData] = await pool.query(
+        `SELECT id, level, part FROM tb_parts_bom WHERE AssetCode = ?`, [AssetCode]
+      );
+      if (partsData.length > 0) {
+        responsePayload.status = "PENDING";
+        responsePayload.data.requiresChecklist = true;
+        responsePayload.data.parts = partsData.map(p => ({
+          id: p.id,
+          level: p.level,
+          part: p.part
+        }));
+        responsePayload.message = "Cek Kelengkapan BOM";
+        return res.status(200).json(responsePayload);
+      }
+    }
+
+    if (!responsePayload.message) {
+      responsePayload.message = "Validasi berhasil. Asset siap difinalisasi.";
+    }
+
+    return res.status(201).json(responsePayload);
+
+  } catch (error) {
+    console.error("❌ Error:", error);
+    return res.status(500).json({ status: "ERROR", message: "Internal Server Error", error: error.message });
+  }
+});
 
 
-      // Pengecekan data di tb_stockopname_d sebelum insert
-      const checkMasterDataSql = `
+router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
+  try {
+    const pool = await connectDb();
+    const { noso } = req.params;
+    const { AssetCode, AssetName, BOMList } = req.body;
+    const Username = req.user?.username || null;
+    const idUser = req.user?.id_user || null;
+
+    if (!AssetCode || !AssetName) {
+      return res.status(400).json({ message: "AssetCode dan AssetName wajib diisi" });
+    }
+
+    // Cek dan update master data seperti sebelumnya
+    const checkMasterDataSql = `
       SELECT NoSO, AssetCode, HasNotBeenPrinted, Image, id_status, id_user 
       FROM tb_stockopname_d 
       WHERE NoSO = ? AND AssetCode = ?
     `;
-
     const [masterDataResult] = await pool.query(checkMasterDataSql, [noso, AssetCode]);
 
     if (masterDataResult.length > 0) {
       const masterData = masterDataResult[0];
-      
-      // Hapus gambar dari file system jika ada
+
       if (masterData.Image) {
         const imagePath = path.join(__dirname, '..', 'storage', 'uploads', masterData.Image);
-        
         try {
-          // Cek apakah file gambar ada, lalu hapus
           if (fs.existsSync(imagePath)) {
-            fs.unlinkSync(imagePath);  // Hapus file
+            fs.unlinkSync(imagePath);
             console.log(`✅ File gambar ${masterData.Image} berhasil dihapus`);
           } else {
             console.log(`⚠️ File gambar ${masterData.Image} tidak ditemukan`);
           }
         } catch (err) {
           console.error(`❌ Gagal menghapus file gambar: ${err.message}`);
-          // Lanjutkan proses meskipun gagal menghapus file
         }
       }
 
-      // Update data di tb_stockopname_d
       const updateMasterDataSql = `
         UPDATE tb_stockopname_d 
         SET 
@@ -961,39 +998,55 @@ router.post("/no-stock-opname/:noso", verifyToken, async (req, res) => {
           id_user = ""
         WHERE NoSO = ? AND AssetCode = ?
       `;
-      
       await pool.query(updateMasterDataSql, [noso, AssetCode]);
       console.log(`✅ Data master untuk AssetCode ${AssetCode} telah diupdate`);
     }
 
-
-    const sql = `
+    // Insert hasil scan ke tb_stockopname_d_hasil
+    const insertSql = `
       INSERT INTO tb_stockopname_d_hasil (NoSO, AssetCode, id_user, DateTimeScan) 
       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
     `;
+    await pool.query(insertSql, [noso, AssetCode, idUser]);
 
-    const [result] = await pool.query(sql, [noso, AssetCode, idUser]);
+    // Jika BOMList ada dan tidak kosong, insert ke tb_stockopname_hasil_bom
+    if (Array.isArray(BOMList) && BOMList.length > 0) {
+      // Bisa insert multiple sekaligus dengan batch insert
+      const bomValues = BOMList.map(bom => [noso, AssetCode, bom.IdBOM, bom.IsExist ? 1 : 0]);
 
+      // Contoh query batch insert
+      const insertBomSql = `
+        INSERT INTO tb_stockopname_hasil_bom (NoSO, AssetCode, IdBOM, IsExist)
+        VALUES ?
+      `;
+      await pool.query(insertBomSql, [bomValues]);
+      console.log(`✅ Data BOM untuk AssetCode ${AssetCode} berhasil disimpan`);
+    } else {
+      console.log(`ℹ️ Tidak ada data BOM untuk disimpan`);
+    }
+
+    // Kirim response sukses
     res.status(201).json({ message: `Asset ${AssetCode} berhasil ditambahkan!` });
-    
-    // Broadcast ke semua client yang subscribe ke NoSO ini
+
+    // Broadcast ke client
     broadcast({
       type: 'NEW_ASSET',
       data: {
         NoSO: noso,
-        AssetCode: AssetCode,
-        AssetName: AssetName,
-        Username: Username, 
-        DateTimeScan: new Date().toISOString()
-        // Tambahkan field lain yang diperlukan frontend
+        AssetCode,
+        AssetName,
+        Username,
+        DateTimeScan: new Date().toISOString(),
       }
     });
 
   } catch (error) {
-    console.error("❌ Error:", error);
-    res.status(500).json({ message: "Internal Server Error", error: error.message });
+    console.error("❌ Error saat submit asset:", error);
+    res.status(500).json({ status: "ERROR", message: "Internal Server Error", error: error.message });
   }
 });
+
+
 
 
 

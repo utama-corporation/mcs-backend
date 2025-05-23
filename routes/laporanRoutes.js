@@ -9,6 +9,10 @@ router.get('/report/:noso/pdf', async (req, res) => {
     await connectDb();
 
     const noSO = req.params.noso;
+
+    const tanggal = req.query.tanggal;
+    const perusahaan = req.query.perusahaan;
+    
     if (!noSO) {
       return res.status(400).json({ message: 'Parameter NoSO tidak boleh kosong' });
     }
@@ -17,10 +21,13 @@ router.get('/report/:noso/pdf', async (req, res) => {
     const [notFoundRows] = await pool.query(`
       SELECT 
         SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) AS LocationCode,
+        loc.location_name AS LocationName,
         d.AssetCode,
         a.AssetName
       FROM tb_stockopname_d d
       LEFT JOIN asset a ON a.AssetCode = d.AssetCode
+      LEFT JOIN tb_location_asset loc 
+        ON loc.location_code = SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1)
       WHERE d.NoSO = ?
         AND d.HasNotBeenPrinted != 1
         AND NOT EXISTS (
@@ -30,27 +37,60 @@ router.get('/report/:noso/pdf', async (req, res) => {
         )
       ORDER BY LocationCode, d.AssetCode
     `, [noSO]);
+    
 
     const [noQrRows] = await pool.query(`
       SELECT 
         SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) AS LocationCode,
+        loc.location_name AS LocationName,
         d.AssetCode,
         a.AssetName,
         s.status
       FROM tb_stockopname_d d
       JOIN asset a ON d.AssetCode = a.AssetCode
       JOIN tb_so_status s ON d.id_status = s.id_status
+      LEFT JOIN tb_location_asset loc 
+        ON loc.location_code = SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1)
       WHERE d.HasNotBeenPrinted = 1
         AND d.NoSO = ?
       ORDER BY LocationCode, d.AssetCode
-    `, [noSO]);    
+    `, [noSO]);
+    
 
     const [nonAssetRows] = await pool.query(`
-      SELECT location_code, non_asset_name, remark
-      FROM tb_stockopname_non_assets
-      WHERE NoSO = ?
-      ORDER BY location_code, non_asset_name
+      SELECT 
+        na.location_code,
+        loc.location_name AS LocationName,  
+        na.non_asset_name,
+        na.remark
+      FROM tb_stockopname_non_assets na
+      LEFT JOIN tb_location_asset loc 
+        ON loc.location_code = na.location_code
+      WHERE na.NoSO = ?
+      ORDER BY na.location_code, na.non_asset_name
     `, [noSO]);
+
+
+    const [bomRows] = await pool.query(`
+    SELECT 
+      SUBSTRING_INDEX(SUBSTRING_INDEX(h.AssetCode, '/', 2), '-', -1) AS LocationCode,
+      loc.location_name AS LocationName,
+      h.NoSO,
+      h.AssetCode,
+      CONCAT(a.AssetName, ' (', h.AssetCode, ')') AS AssetLabel,
+      p.part AS PartName,
+      h.IsExist
+    FROM tb_stockopname_hasil_bom h
+    LEFT JOIN tb_location_asset loc 
+      ON loc.location_code = SUBSTRING_INDEX(SUBSTRING_INDEX(h.AssetCode, '/', 2), '-', -1)
+    LEFT JOIN tb_parts_bom p
+      ON h.IdBOM = p.id
+    LEFT JOIN asset a
+      ON a.AssetCode = h.AssetCode
+    WHERE h.NoSO = ? AND IsExist = 0
+    ORDER BY LocationCode, h.AssetCode
+    `, [noSO]);    
+    
 
     // Grouping fungsi sama seperti sebelumnya
 
@@ -58,66 +98,119 @@ router.get('/report/:noso/pdf', async (req, res) => {
       const result = {};
       rows.forEach(row => {
         const loc = row.LocationCode;
-        if (!result[loc]) result[loc] = [];
-        result[loc].push({ AssetCode: row.AssetCode, AssetName: row.AssetName });
+        if (!result[loc]) {
+          result[loc] = {
+            locationName: row.LocationName || loc,
+            assetList: []
+          };
+        }
+        result[loc].assetList.push({ AssetCode: row.AssetCode, AssetName: row.AssetName });
       });
-      return Object.entries(result).map(([locationCode, assets]) => ({
+    
+      return Object.entries(result).map(([locationCode, data]) => ({
         locationCode,
-        assetList: assets
+        locationName: data.locationName,
+        assetList: data.assetList
       }));
     };
     
-
+    
     const groupWithoutQRByLocation = (rows) => {
       const result = {};
       rows.forEach(row => {
         const loc = row.LocationCode;
-        if (!result[loc]) result[loc] = [];
-        result[loc].push({ AssetCode: row.AssetCode, AssetName: row.AssetName, Status: row.status });
+        if (!result[loc]) {
+          result[loc] = {
+            locationName: row.LocationName || loc,
+            assetList: []
+          };
+        }
+        result[loc].assetList.push({ AssetCode: row.AssetCode, AssetName: row.AssetName, Status: row.status });
       });
-      return Object.entries(result).map(([locationCode, assets]) => ({
+    
+      return Object.entries(result).map(([locationCode, data]) => ({
         locationCode,
-        assetList: assets
+        locationName: data.locationName,
+        assetList: data.assetList
       }));
     };
+    
 
     const groupNonAssetByLocation = (rows) => {
       const result = {};
       rows.forEach(row => {
         const loc = row.location_code;
-        if (!result[loc]) result[loc] = [];
-        result[loc].push({ AssetName: row.non_asset_name, Remark: row.remark });
+        if (!result[loc]) {
+          result[loc] = {
+            locationName: row.LocationName || loc,
+            assetList: []
+          };
+        }
+        result[loc].assetList.push({ AssetName: row.non_asset_name, Remark: row.remark });
       });
-      return Object.entries(result).map(([locationCode, assets]) => ({
+    
+      return Object.entries(result).map(([locationCode, data]) => ({
         locationCode,
-        assetList: assets
+        locationName: data.locationName,
+        assetList: data.assetList
       }));
     };
+
+
+    const groupBOMByLocation = (rows) => {
+      const result = {};
+      rows.forEach(row => {
+        const loc = row.LocationCode;
+        if (!result[loc]) {
+          result[loc] = {
+            locationName: row.LocationName || loc,
+            assetList: []
+          };
+        }
+        result[loc].assetList.push({
+          AssetCode: row.AssetLabel,
+          PartName: row.PartName || '-',
+          IsExist: row.IsExist
+        });
+      });
+    
+      return Object.entries(result).map(([locationCode, data]) => ({
+        locationCode,
+        locationName: data.locationName,
+        assetList: data.assetList
+      }));
+    };
+    
+    
+    
 
     const AssetTidakDitemukan = groupNotFoundByLocation(notFoundRows);
     const AssetDitemukanTanpaQR = groupWithoutQRByLocation(noQrRows);
     const AssetTidakTerdaftar = groupNonAssetByLocation(nonAssetRows);
+    const hasilBomPerLocation = groupBOMByLocation(bomRows);
+
 
     // Buat PDF dengan pdfkit
     const doc = new PDFDocument({ margin: 40, size: 'A4' });
 
     // Set response header biar browser download/pdf viewer langsung terbuka
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename=Laporan_${noSO}.pdf`);
-
+    const safeNoSO = noSO.replace(/\./g, '_');  // ganti semua titik jadi underscore
+    res.setHeader('Content-Disposition', `inline; filename=Laporan_${safeNoSO}.pdf`);
+    
     doc.pipe(res);
 
     // Judul tengah atas
     doc.fontSize(16).font('Helvetica-Bold').text('LAPORAN HASIL STOCK OPNAME ASET', { align: 'center' });
     doc.moveDown(1.5);
 
-    doc.fontSize(14).font('Helvetica-Bold').text('Tanggal :');
+    doc.fontSize(12).font('Helvetica-Bold').text(`Tanggal : ${tanggal || '-'}`);
     doc.moveDown(0.5);
 
-    doc.fontSize(14).font('Helvetica-Bold').text('Perusahaan :');
-    doc.moveDown(2);
+    doc.fontSize(12).font('Helvetica-Bold').text(`Perusahaan : ${perusahaan || '-'}`);
+    doc.moveDown(1);
 
-    doc.fontSize(14).font('Helvetica-Bold').text('I. Hasil Stock Opname');
+    doc.fontSize(12).font('Helvetica-Bold').text('I. Hasil Stock Opname');
     doc.moveDown(1);
 
     // Fungsi untuk print tabel aset: nomor, kode aset, nama aset (nama aset = kode aset)
@@ -132,7 +225,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
 
       // Header
       const headerHeight = 20;
-      doc.font('Helvetica-Bold').fontSize(12);
+      doc.font('Helvetica-Bold').fontSize(10);
       doc.rect(startX, y, colNoWidth, headerHeight).stroke();
       doc.rect(startX + colNoWidth, y, colKodeWidth, headerHeight).stroke();
       doc.rect(startX + colNoWidth + colKodeWidth, y, colNamaWidth, headerHeight).stroke();
@@ -144,7 +237,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
       y += headerHeight;
 
       // Data Rows
-      doc.font('Helvetica').fontSize(11);
+      doc.font('Helvetica').fontSize(9);
       items.forEach((item, idx) => {
         // Hitung tinggi teks tiap kolom
         const noText = (idx + 1).toString();
@@ -158,7 +251,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
         const rowHeight = Math.max(heightNo, heightKode, heightNama) + rowPadding * 1.5;
 
         // Tambah halaman jika posisi sudah mendekati bawah
-        if (y + rowHeight > doc.page.height - 60) {
+        if (y + rowHeight > doc.page.height - 120) {
           doc.addPage();
           y = doc.y;
         }
@@ -197,7 +290,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
 
       // Header
       const headerHeight = 20;
-      doc.font('Helvetica-Bold').fontSize(12);
+      doc.font('Helvetica-Bold').fontSize(10);
 
       doc.rect(startX, y, colNoWidth, headerHeight).stroke();
       doc.rect(startX + colNoWidth, y, colKodeWidth, headerHeight).stroke();
@@ -212,7 +305,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
       y += headerHeight;
 
       // Data Rows
-      doc.font('Helvetica').fontSize(11);
+      doc.font('Helvetica').fontSize(9);
       items.forEach((item, idx) => {
         const noText = (idx + 1).toString();
         const kodeText = item.AssetCode;
@@ -228,7 +321,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
         const rowHeight = Math.max(heightNo, heightKode, heightNama, heightStatus) + paddingTop + paddingBottom;
 
         // Tambah halaman jika terlalu bawah
-        if (y + rowHeight > doc.page.height - 60) {
+        if (y + rowHeight > doc.page.height - 120) {
           doc.addPage();
           y = doc.y;
         }
@@ -268,20 +361,20 @@ router.get('/report/:noso/pdf', async (req, res) => {
     
       // Header
       const headerHeight = 20;
-      doc.font('Helvetica-Bold').fontSize(12);
+      doc.font('Helvetica-Bold').fontSize(10);
     
       doc.rect(startX, y, colNoWidth, headerHeight).stroke();
       doc.rect(startX + colNoWidth, y, colNamaWidth, headerHeight).stroke();
       doc.rect(startX + colNoWidth + colNamaWidth, y, colKeterangan, headerHeight).stroke();
     
       doc.text('No', startX + 5, y + 5, { width: colNoWidth - 10, align: 'center' });
-      doc.text('Nama Aset', startX + colNoWidth + 5, y + 5, { width: colNamaWidth - 10, align: 'center' });
+      doc.text('Aset', startX + colNoWidth + 5, y + 5, { width: colNamaWidth - 10, align: 'center' });
       doc.text('Keterangan', startX + colNoWidth + colNamaWidth + 5, y + 5, { width: colKeterangan - 10, align: 'center' });
     
       y += headerHeight;
     
       // Baris data
-      doc.font('Helvetica').fontSize(11);
+      doc.font('Helvetica').fontSize(9);
       items.forEach((item, idx) => {
         const noText = (idx + 1).toString();
         const namaText = item.AssetName;
@@ -293,7 +386,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
     
         const rowHeight = Math.max(heightNo, heightNama, heightKet) + paddingTop + paddingBottom;
     
-        if (y + rowHeight > doc.page.height - 60) {
+        if (y + rowHeight > doc.page.height - 120) {
           doc.addPage();
           y = doc.y;
         }
@@ -311,52 +404,429 @@ router.get('/report/:noso/pdf', async (req, res) => {
     
       doc.moveDown(1);
       doc.y = y + 5;
-    }    
+    } 
+    
+
+    function printAssetTableBOM(items) {
+      const startX = doc.x;
+      let y = doc.y;
+      const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    
+      const colNoWidth = 40;
+      const colKodeWidth = (tableWidth - colNoWidth) / 2;
+      const colPartWidth = (tableWidth - colNoWidth) / 2;
+    
+      const paddingTop = 3;
+      const paddingBottom = 1;
+    
+      // Header
+      const headerHeight = 20;
+      doc.font('Helvetica-Bold').fontSize(10);
+    
+      doc.rect(startX, y, colNoWidth, headerHeight).stroke();
+      doc.rect(startX + colNoWidth, y, colKodeWidth, headerHeight).stroke();
+      doc.rect(startX + colNoWidth + colKodeWidth, y, colPartWidth, headerHeight).stroke();
+    
+      doc.text('No', startX + 5, y + 5, { width: colNoWidth - 10, align: 'center' });
+      doc.text('Kode Aset', startX + colNoWidth + 5, y + 5, { width: colKodeWidth - 10, align: 'center' });
+      doc.text('BOM', startX + colNoWidth + colKodeWidth + 5, y + 5, { width: colPartWidth - 10, align: 'center' });
+    
+      y += headerHeight;
+    
+      doc.font('Helvetica').fontSize(9);
+    
+      let rowNumber = 1;
+      let i = 0;
+    
+      while (i < items.length) {
+        const currentAsset = items[i].AssetCode;
+    
+        // Ambil semua item dengan AssetCode yang sama
+        const group = [];
+        while (i < items.length && items[i].AssetCode === currentAsset) {
+          group.push(items[i]);
+          i++;
+        }
+    
+        // Hitung tinggi per baris
+        let totalRowHeight = 0;
+        const rowHeights = [];
+    
+        group.forEach((item) => {
+          const partText = item.PartName || '-';
+          const heightPart = doc.heightOfString(partText, { width: colPartWidth - 10 });
+          const rowHeight = heightPart + paddingTop + paddingBottom;
+          rowHeights.push(rowHeight);
+          totalRowHeight += rowHeight;
+        });
+    
+        // Tambahkan halaman baru jika tidak cukup ruang
+        if (y + totalRowHeight > doc.page.height - 120) {
+          doc.addPage();
+          y = doc.y;
+        }
+    
+        // Gambar sekali: kolom No dan Kode Aset
+        doc.rect(startX, y, colNoWidth, totalRowHeight).stroke();
+        doc.rect(startX + colNoWidth, y, colKodeWidth, totalRowHeight).stroke();
+    
+        const assetLabel = group[0].AssetLabel || currentAsset;
+        doc.text(rowNumber.toString(), startX + 5, y + paddingTop, {
+          width: colNoWidth - 10,
+          align: 'center',
+        });
+    
+        doc.text(assetLabel, startX + colNoWidth + 5, y + paddingTop, {
+          width: colKodeWidth - 10,
+        });
+    
+        // Gambar kolom Part
+        let rowY = y;
+        group.forEach((item, index) => {
+          const partText = item.PartName || '-';
+          const rowHeight = rowHeights[index];
+    
+          doc.rect(startX + colNoWidth + colKodeWidth, rowY, colPartWidth, rowHeight).stroke();
+    
+          doc.text(partText, startX + colNoWidth + colKodeWidth + 5, rowY + paddingTop, {
+            width: colPartWidth - 10,
+          });
+    
+          rowY += rowHeight;
+        });
+    
+        y += totalRowHeight;
+        rowNumber++;
+      }
+    
+      doc.moveDown(1);
+      doc.y = y + 5;
+    }
+    
+    
+    
     
 
     // Kita looping tiap lokasi dan tampilkan sesuai format
     const allLocations = new Set([
-      ...AssetTidakDitemukan.map(g => g.locationCode),
-      ...AssetDitemukanTanpaQR.map(g => g.locationCode),
-      ...AssetTidakTerdaftar.map(g => g.locationCode),
+      ...AssetTidakDitemukan.map(g => g.locationName),
+      ...AssetDitemukanTanpaQR.map(g => g.locationName),
+      ...AssetTidakTerdaftar.map(g => g.locationName),
     ]);
 
     let locIndex = 1;
+    let adaSelisih = false;
+
     for (const loc of allLocations) {
-      doc.font('Helvetica-Bold').fontSize(13).text(`${locIndex}. Lokasi ${loc}`, doc.page.margins.left + 10);
-      doc.moveDown(0.5);
-
-      // A. Aset Tidak Ditemukan
-      const asetTidakDitemukan = AssetTidakDitemukan.find(g => g.locationCode === loc);
-      if (asetTidakDitemukan && asetTidakDitemukan.assetList.length > 0) {
-        doc.font('Helvetica-Bold').fontSize(12)  .text('A. Aset tidak ditemukan', doc.page.margins.left + 20);
-        printAssetTable(asetTidakDitemukan.assetList);
-      }
-
-      // B. Aset Ditemukan tanpa QR
-      const asetDitemukanTanpaQR = AssetDitemukanTanpaQR.find(g => g.locationCode === loc);
-      if (asetDitemukanTanpaQR && asetDitemukanTanpaQR.assetList.length > 0) {
-        doc.moveDown(1); // Ini memastikan spasi antar bagian konsisten
-        doc.font('Helvetica-Bold').fontSize(12).text('B. Aset ditemukan tanpa QR', doc.page.margins.left + 20);
-        printAssetTableWithoutQR(asetDitemukanTanpaQR.assetList);
-      }
-
-      // C. Aset Tidak Terdaftar
-      const asetTidakTerdaftar = AssetTidakTerdaftar.find(g => g.locationCode === loc);
-      if (asetTidakTerdaftar && asetTidakTerdaftar.assetList.length > 0) {
-        doc.moveDown(1); // Ini memastikan spasi antar bagian konsisten
-        doc.font('Helvetica-Bold').fontSize(12) .text('C. Aset tidak terdaftar', doc.page.margins.left + 20);
-        printNonAssetTable(asetTidakTerdaftar.assetList);
-      }
-
-      doc.moveDown(3);
-      locIndex++;
-
-      // Tambah halaman jika posisi sudah mendekati bawah
-      if (doc.y > doc.page.height - 100) {
-        doc.addPage();
+      const asetTidakDitemukan = AssetTidakDitemukan.find(g => g.locationName === loc);
+      const asetDitemukanTanpaQR = AssetDitemukanTanpaQR.find(g => g.locationName === loc);
+      const asetTidakTerdaftar = AssetTidakTerdaftar.find(g => g.locationName === loc);
+    
+      const adaAsetTidakDitemukan = asetTidakDitemukan && asetTidakDitemukan.assetList.length > 0;
+      const adaAsetDitemukanTanpaQR = asetDitemukanTanpaQR && asetDitemukanTanpaQR.assetList.length > 0;
+      const adaAsetTidakTerdaftar = asetTidakTerdaftar && asetTidakTerdaftar.assetList.length > 0;
+    
+      if (adaAsetTidakDitemukan || adaAsetDitemukanTanpaQR || adaAsetTidakTerdaftar) {
+        adaSelisih = true;
+    
+        doc.font('Helvetica-Bold').fontSize(10).text(`${locIndex}. Lokasi ${loc}`, doc.page.margins.left + 10);
+        doc.moveDown(0.2);
+    
+        if (adaAsetTidakDitemukan) {
+          doc.font('Helvetica-Bold').fontSize(10).text('A. Aset Tidak Ditemukan', doc.page.margins.left + 20);
+          printAssetTable(asetTidakDitemukan.assetList);
+        }
+    
+        if (adaAsetDitemukanTanpaQR) {
+          doc.moveDown(1);
+          doc.font('Helvetica-Bold').fontSize(10).text('B. Aset Ditemukan Tanpa QR Code', doc.page.margins.left + 20);
+          printAssetTableWithoutQR(asetDitemukanTanpaQR.assetList);
+        }
+    
+        if (adaAsetTidakTerdaftar) {
+          doc.moveDown(1);
+          doc.font('Helvetica-Bold').fontSize(10).text('C. Aset Temuan', doc.page.margins.left + 20);
+          printNonAssetTable(asetTidakTerdaftar.assetList);
+        }
+    
+        doc.moveDown(1);
+        locIndex++;
+    
+        if (doc.y > doc.page.height - 120) {
+          doc.addPage();
+        }
       }
     }
+    
+    // Jika tidak ada data sama sekali di semua lokasi
+    if (!adaSelisih) {
+      doc.font('Helvetica-Oblique').fontSize(11).text('Hasil Stock Opname tidak ada selisih.', {
+        align: 'center',
+        valign: 'bottom',
+      });
+    }
+    
+
+    // doc.addPage(); // Mulai halaman baru
+    doc.moveDown(1);
+    doc.font('Helvetica-Bold').fontSize(12) .text('II. Ringkasan Stock Opname', doc.page.margins.left);
+    doc.moveDown(0.2);
+
+   // Ambil data total aset berdasarkan lokasi + location_name
+    const [totalAssetRows] = await pool.query(`
+      SELECT 
+        SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) AS LocationCode,
+        l.location_name AS LocationName,
+        COUNT(*) AS TotalAssets
+      FROM tb_stockopname_d d
+      LEFT JOIN tb_location_asset l 
+        ON SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) = l.location_code
+      WHERE d.NoSO = ?
+      GROUP BY LocationCode, l.location_name
+      ORDER BY LocationCode
+    `, [noSO]);
+
+    // Ambil data hasil scan berdasarkan lokasi + location_name
+    const [totalScannedAssetRows] = await pool.query(`
+      SELECT 
+        SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) AS LocationCode,
+        l.location_name AS LocationName,
+        COUNT(*) AS TotalAssets
+      FROM tb_stockopname_d_hasil d
+      LEFT JOIN tb_location_asset l 
+        ON SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) = l.location_code
+      WHERE d.NoSO = ?
+      GROUP BY LocationCode, l.location_name
+      ORDER BY LocationCode
+    `, [noSO]);
+
+    // Gabungkan semua lokasi unik dari ketiga kategori
+    const lokasiSet = new Set();
+    AssetTidakDitemukan.forEach(e => lokasiSet.add(e.locationCode));
+    AssetDitemukanTanpaQR.forEach(e => lokasiSet.add(e.locationCode));
+    AssetTidakTerdaftar.forEach(e => lokasiSet.add(e.locationCode));
+
+    const lokasiList = Array.from(lokasiSet).sort();
+
+    // Buat mapping dari locationCode ke locationName dengan menggabungkan semua sumber data
+    const locationNameMap = {};
+
+    // Tambahkan dari totalAssetRows
+    totalAssetRows.forEach(row => {
+      if (row.LocationCode && row.LocationName) {
+        locationNameMap[row.LocationCode] = row.LocationName;
+      }
+    });
+
+    // Tambahkan dari totalScannedAssetRows
+    totalScannedAssetRows.forEach(row => {
+      if (row.LocationCode && row.LocationName && !locationNameMap[row.LocationCode]) {
+        locationNameMap[row.LocationCode] = row.LocationName;
+      }
+    });
+
+    // Tambahkan dari data non-asset
+    nonAssetRows.forEach(row => {
+      if (row.location_code && row.LocationName && !locationNameMap[row.location_code]) {
+        locationNameMap[row.location_code] = row.LocationName;
+      }
+    });
+
+    // Tambahkan dari data aset tidak ditemukan
+    notFoundRows.forEach(row => {
+      if (row.LocationCode && row.LocationName && !locationNameMap[row.LocationCode]) {
+        locationNameMap[row.LocationCode] = row.LocationName;
+      }
+    });
+
+    // Tambahkan dari data aset tanpa QR
+    noQrRows.forEach(row => {
+      if (row.LocationCode && row.LocationName && !locationNameMap[row.LocationCode]) {
+        locationNameMap[row.LocationCode] = row.LocationName;
+      }
+    });
+
+    // Hitung total masing-masing kategori per lokasi
+    const summaryData = lokasiList.map((lokasi, index) => {
+      const totalAsset = totalAssetRows.find(row => row.LocationCode === lokasi);
+      const totalScannedAsset = totalScannedAssetRows.find(row => row.LocationCode === lokasi);
+      const notFound = AssetTidakDitemukan.find(l => l.locationCode === lokasi);
+      const tanpaQR = AssetDitemukanTanpaQR.find(l => l.locationCode === lokasi);
+      const tidakTerdaftar = AssetTidakTerdaftar.find(l => l.locationCode === lokasi);
+
+      return {
+        no: index + 1,
+        lokasi,
+        lokasiName: locationNameMap[lokasi] || '-',
+        totalAssetTersedia: totalAsset ? totalAsset.TotalAssets : 0,
+        totalScannedAsset: totalScannedAsset ? totalScannedAsset.TotalAssets : 0,
+        totalNotFound: notFound ? notFound.assetList.length : 0,
+        totalNoQR: tanpaQR ? tanpaQR.assetList.length : 0,
+        totalNonAsset: tidakTerdaftar ? tidakTerdaftar.assetList.length : 0
+      };
+    });
+
+    
+ 
+     // Cetak tabel ringkasan
+     function printRingkasanTable(items) {
+      const startX = doc.x;
+      let y = doc.y;
+      const padding = 5;
+    
+      const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    
+      const colNoWidth = 40;
+      const colJumlahWidth = (tableWidth - colNoWidth) * 0.7 / 5;
+      const colLokasiWidth = (tableWidth - colNoWidth) * 0.3;      
+    
+      const headers = [
+        { text: 'No', width: colNoWidth },
+        { text: 'Lokasi', width: colLokasiWidth },
+        { text: 'Aset Di MCS', width: colJumlahWidth },
+        { text: 'Hasil Scan', width: colJumlahWidth },
+        { text: 'Aset Tidak Ditemukan', width: colJumlahWidth },
+        { text: 'Aset Tanpa QR Code', width: colJumlahWidth },
+        { text: 'Aset Tidak Terdaftar', width: colJumlahWidth }
+      ];      
+    
+      doc.font('Helvetica-Bold').fontSize(10);
+    
+      // Hitung tinggi header secara dinamis
+      const headerHeights = headers.map(header =>
+        doc.heightOfString(header.text, {
+          width: header.width - 2 * padding,
+          align: 'center'
+        })
+      );
+      const headerHeight = Math.max(...headerHeights) + 2 * padding;
+    
+      // Gambar header
+      let currentX = startX;
+      headers.forEach((header, i) => {
+        doc.rect(currentX, y, header.width, headerHeight).stroke();
+        doc.text(header.text, currentX + padding, y + padding, {
+          width: header.width - 2 * padding,
+          align: 'center'
+        });
+        currentX += header.width;
+      });
+    
+      y += headerHeight;
+    
+      // Isi data baris
+      doc.font('Helvetica').fontSize(9);
+    
+      items.forEach(item => {
+        // Siapkan data isi baris
+        const rowData = [
+          { text: item.no.toString(), width: colNoWidth, align: 'center' },
+          { text: item.lokasiName, width: colLokasiWidth, align: 'left' },
+          { text: item.totalAssetTersedia.toString(), width: colJumlahWidth, align: 'center' },
+          { text: item.totalScannedAsset.toString(), width: colJumlahWidth, align: 'center' },
+          { text: item.totalNotFound.toString(), width: colJumlahWidth, align: 'center' },
+          { text: item.totalNoQR.toString(), width: colJumlahWidth, align: 'center' },
+          { text: item.totalNonAsset.toString(), width: colJumlahWidth, align: 'center' },
+        ];
+      
+        // Hitung tinggi setiap cell dan ambil tinggi maksimum
+        const cellHeights = rowData.map(cell =>
+          doc.heightOfString(cell.text, {
+            width: cell.width - 2 * padding,
+            align: cell.align
+          })
+        );
+        const rowHeight = Math.max(...cellHeights) + 2 * padding;
+      
+        // Pindah ke halaman baru jika melebihi batas halaman
+        if (y + rowHeight > doc.page.height - 120) {
+          doc.addPage();
+          y = doc.y;
+        }
+      
+        // Gambar border dan isi teks
+        let currentX = startX;
+        rowData.forEach((cell, i) => {
+          doc.rect(currentX, y, cell.width, rowHeight).stroke();
+          doc.text(cell.text, currentX + padding, y + padding, {
+            width: cell.width - 2 * padding,
+            align: cell.align
+          });
+          currentX += cell.width;
+        });
+      
+        y += rowHeight;
+      });
+      
+    
+      // Baris TOTAL
+      const totalAssetTersedia = items.reduce((sum, item) => sum + item.totalAssetTersedia, 0);
+      const totalScannedAsset = items.reduce((sum, item) => sum + item.totalScannedAsset, 0);
+      const totalNotFound = items.reduce((sum, item) => sum + item.totalNotFound, 0);
+      const totalNoQR = items.reduce((sum, item) => sum + item.totalNoQR, 0);
+      const totalNonAsset = items.reduce((sum, item) => sum + item.totalNonAsset, 0);
+      
+      const totalRowHeight = 20;
+      if (y + totalRowHeight > doc.page.height - 120) {
+        doc.addPage();
+        y = doc.y;
+      }
+    
+      doc.font('Helvetica-Bold');
+    
+      doc.rect(startX, y, colNoWidth + colLokasiWidth, totalRowHeight).stroke();
+      doc.text('TOTAL', startX + padding, y + padding, {
+        width: colNoWidth + colLokasiWidth - 2 * padding,
+        align: 'center'
+      });
+    
+      const totalData = [
+        totalAssetTersedia,
+        totalScannedAsset,
+        totalNotFound,
+        totalNoQR,
+        totalNonAsset,
+      ];      
+    
+      let totalX = startX + colNoWidth + colLokasiWidth;
+      totalData.forEach(total => {
+        doc.rect(totalX, y, colJumlahWidth, totalRowHeight).stroke();
+        doc.text(total.toString(), totalX + padding, y + padding, {
+          width: colJumlahWidth - 2 * padding,
+          align: 'center'
+        });
+        totalX += colJumlahWidth;
+      });
+    
+      doc.moveDown(2);
+      doc.y = y + totalRowHeight + 5;
+    }
+ 
+    if (summaryData && summaryData.length > 0) {
+      printRingkasanTable(summaryData);
+    } else {
+      const centerX = doc.page.width / 2;
+      const bottomY = doc.page.height - 100;
+    
+      doc.font('Helvetica-Oblique').fontSize(11).text('Hasil Stock Opname tidak ada selisih.', {
+        align: 'center',
+        valign: 'bottom',
+      });
+    }
+    
+
+     doc.moveDown(5);
+
+     let rowNumber = 1;
+     hasilBomPerLocation.forEach(loc => {
+      doc.font('Helvetica-Bold').fontSize(12).text(`III. BOM Asset Yang Tidak Lengkap`, doc.page.margins.left);
+      doc.moveDown(0.5);
+      doc.font('Helvetica-Bold').fontSize(12).text(`${rowNumber++}. Lokasi ${loc.locationName}`, doc.page.margins.left + 10);
+      doc.moveDown(0.2);
+      printAssetTableBOM(loc.assetList);
+    });
+    
+
 
     doc.end();
   } catch (error) {
