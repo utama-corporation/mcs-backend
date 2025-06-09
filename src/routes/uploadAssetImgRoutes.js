@@ -2,9 +2,9 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const verifyToken = require('../middleware/verifyToken'); // Middleware to verify JWT token
+const verifyToken = require('../middleware/verifyToken'); 
 const router = express.Router();
-const uploadDir = path.join(__dirname, '..', 'storage', 'uploads');
+const uploadDir = path.join(__dirname, '..', '..', 'storage', 'uploads');
 
 // Pastikan folder upload ada
 if (!fs.existsSync(uploadDir)) {

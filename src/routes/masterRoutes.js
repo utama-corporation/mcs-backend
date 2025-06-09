@@ -1,7 +1,7 @@
 const express = require('express');
 const verifyToken = require('../middleware/verifyToken'); // Middleware to verify JWT token
 const moment = require('moment');
-const { pool, connectDb } = require('../db');  // Import MySQL connection pool
+const { pool, connectDb } = require('../../db');  // Import MySQL connection pool
 const router = express.Router();
 
 

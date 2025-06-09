@@ -1,7 +1,7 @@
 const express = require('express');
 const moment = require('moment');
 const PDFDocument = require('pdfkit');
-const { pool, connectDb } = require('../db');
+const { pool, connectDb } = require('../../db');
 const router = express.Router();
 
 router.get('/report/:noso/pdf', async (req, res) => {
@@ -11,6 +11,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
     const noSO = req.params.noso;
 
     const tanggal = req.query.tanggal;
+    const lockedDate = req.query.lockeddate || "-";
     const perusahaan = req.query.perusahaan;
     
     if (!noSO) {
@@ -19,47 +20,45 @@ router.get('/report/:noso/pdf', async (req, res) => {
 
     // Query data sama seperti yang sudah kamu buat
     const [notFoundRows] = await pool.query(`
-      SELECT 
-        SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) AS LocationCode,
-        loc.location_name AS LocationName,
-        d.AssetCode,
-        a.AssetName
-      FROM tb_stockopname_d d
-      LEFT JOIN asset a ON a.AssetCode = d.AssetCode
-      LEFT JOIN tb_location_asset loc 
-        ON loc.location_code = SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1)
-      WHERE d.NoSO = ?
-        AND d.HasNotBeenPrinted != 1
-        AND NOT EXISTS (
-          SELECT 1
-          FROM tb_stockopname_d_hasil h
-          WHERE h.NoSO = d.NoSO AND h.AssetCode = d.AssetCode
-        )
-      ORDER BY LocationCode, d.AssetCode
+    SELECT 
+      a.LocationAsset AS LocationCode,
+      a.LocationAsset AS LocationName,
+      d.AssetCode,
+      a.AssetName
+    FROM tb_stockopname_d d
+    LEFT JOIN asset a ON a.AssetCode = d.AssetCode
+    LEFT JOIN tb_location_asset loc ON loc.location_code = a.LocationAsset
+    WHERE d.NoSO = ?
+      AND d.HasNotBeenPrinted != 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tb_stockopname_d_hasil h
+        WHERE h.NoSO = d.NoSO AND h.AssetCode = d.AssetCode
+      )
+    ORDER BY a.LocationAsset, d.AssetCode
     `, [noSO]);
     
 
     const [noQrRows] = await pool.query(`
-      SELECT 
-        SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) AS LocationCode,
-        loc.location_name AS LocationName,
-        d.AssetCode,
-        a.AssetName,
-        s.status
-      FROM tb_stockopname_d d
-      JOIN asset a ON d.AssetCode = a.AssetCode
-      JOIN tb_so_status s ON d.id_status = s.id_status
-      LEFT JOIN tb_location_asset loc 
-        ON loc.location_code = SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1)
-      WHERE d.HasNotBeenPrinted = 1
-        AND d.NoSO = ?
-      ORDER BY LocationCode, d.AssetCode
+SELECT 
+  a.LocationAsset AS LocationCode,
+  a.LocationAsset AS LocationName,
+  d.AssetCode,
+  a.AssetName,
+  s.status
+FROM tb_stockopname_d d
+JOIN asset a ON d.AssetCode = a.AssetCode
+JOIN tb_so_status s ON d.id_status = s.id_status
+LEFT JOIN tb_location_asset loc ON loc.location_code = a.LocationAsset
+WHERE d.HasNotBeenPrinted = 1
+  AND d.NoSO = ?
+ORDER BY a.LocationAsset, d.AssetCode
     `, [noSO]);
     
 
     const [nonAssetRows] = await pool.query(`
       SELECT 
-        na.location_code,
+        loc.location_name AS location_code,
         loc.location_name AS LocationName,  
         na.non_asset_name,
         na.remark
@@ -72,23 +71,20 @@ router.get('/report/:noso/pdf', async (req, res) => {
 
 
     const [bomRows] = await pool.query(`
-    SELECT 
-      SUBSTRING_INDEX(SUBSTRING_INDEX(h.AssetCode, '/', 2), '-', -1) AS LocationCode,
-      loc.location_name AS LocationName,
-      h.NoSO,
-      h.AssetCode,
-      CONCAT(a.AssetName, ' (', h.AssetCode, ')') AS AssetLabel,
-      p.part AS PartName,
-      h.IsExist
-    FROM tb_stockopname_hasil_bom h
-    LEFT JOIN tb_location_asset loc 
-      ON loc.location_code = SUBSTRING_INDEX(SUBSTRING_INDEX(h.AssetCode, '/', 2), '-', -1)
-    LEFT JOIN tb_parts_bom p
-      ON h.IdBOM = p.id
-    LEFT JOIN asset a
-      ON a.AssetCode = h.AssetCode
-    WHERE h.NoSO = ? AND IsExist = 0
-    ORDER BY LocationCode, h.AssetCode
+SELECT 
+  a.LocationAsset AS LocationCode,
+  a.LocationAsset AS LocationName,
+  h.NoSO,
+  h.AssetCode,
+  CONCAT(a.AssetName, ' (', h.AssetCode, ')') AS AssetLabel,
+  p.part AS PartName,
+  h.IsExist
+FROM tb_stockopname_hasil_bom h
+LEFT JOIN asset a ON a.AssetCode = h.AssetCode
+LEFT JOIN tb_location_asset loc ON loc.location_code = a.LocationAsset
+LEFT JOIN tb_parts_bom p ON h.IdBOM = p.id
+WHERE h.NoSO = ? AND h.IsExist = 0
+ORDER BY a.LocationAsset, h.AssetCode
     `, [noSO]);    
     
 
@@ -182,8 +178,6 @@ router.get('/report/:noso/pdf', async (req, res) => {
     };
     
     
-    
-
     const AssetTidakDitemukan = groupNotFoundByLocation(notFoundRows);
     const AssetDitemukanTanpaQR = groupWithoutQRByLocation(noQrRows);
     const AssetTidakTerdaftar = groupNonAssetByLocation(nonAssetRows);
@@ -201,7 +195,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
     doc.pipe(res);
 
     // Judul tengah atas
-    doc.fontSize(16).font('Helvetica-Bold').text('LAPORAN HASIL STOCK OPNAME ASET', { align: 'center' });
+    doc.fontSize(16).font('Helvetica-Bold').text('BERITA ACARA STOCK OPNAME', { align: 'center' });
     doc.moveDown(1.5);
 
     doc.fontSize(12).font('Helvetica-Bold').text(`Tanggal : ${tanggal || '-'}`);
@@ -211,7 +205,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
     doc.moveDown(1);
 
     doc.fontSize(12).font('Helvetica-Bold').text('I. Hasil Stock Opname');
-    doc.moveDown(1);
+    doc.moveDown(0.3);
 
     // Fungsi untuk print tabel aset: nomor, kode aset, nama aset (nama aset = kode aset)
     function printAssetTable(items) {
@@ -504,9 +498,6 @@ router.get('/report/:noso/pdf', async (req, res) => {
     }
     
     
-    
-    
-
     // Kita looping tiap lokasi dan tampilkan sesuai format
     const allLocations = new Set([
       ...AssetTidakDitemukan.map(g => g.locationName),
@@ -530,7 +521,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
         adaSelisih = true;
     
         doc.font('Helvetica-Bold').fontSize(10).text(`${locIndex}. Lokasi ${loc}`, doc.page.margins.left + 10);
-        doc.moveDown(0.2);
+        doc.moveDown(0.3);
     
         if (adaAsetTidakDitemukan) {
           doc.font('Helvetica-Bold').fontSize(10).text('A. Aset Tidak Ditemukan', doc.page.margins.left + 20);
@@ -574,30 +565,30 @@ router.get('/report/:noso/pdf', async (req, res) => {
 
    // Ambil data total aset berdasarkan lokasi + location_name
     const [totalAssetRows] = await pool.query(`
-      SELECT 
-        SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) AS LocationCode,
-        l.location_name AS LocationName,
-        COUNT(*) AS TotalAssets
-      FROM tb_stockopname_d d
-      LEFT JOIN tb_location_asset l 
-        ON SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) = l.location_code
-      WHERE d.NoSO = ?
-      GROUP BY LocationCode, l.location_name
-      ORDER BY LocationCode
+SELECT 
+  a.LocationAsset AS LocationCode,
+  a.LocationAsset AS LocationName,
+  COUNT(*) AS TotalAssets
+FROM tb_stockopname_d d
+LEFT JOIN asset a ON a.AssetCode = d.AssetCode
+LEFT JOIN tb_location_asset l ON l.location_code = a.LocationAsset
+WHERE d.NoSO = ?
+GROUP BY a.LocationAsset, l.location_name
+ORDER BY a.LocationAsset
     `, [noSO]);
 
     // Ambil data hasil scan berdasarkan lokasi + location_name
     const [totalScannedAssetRows] = await pool.query(`
-      SELECT 
-        SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) AS LocationCode,
-        l.location_name AS LocationName,
-        COUNT(*) AS TotalAssets
-      FROM tb_stockopname_d_hasil d
-      LEFT JOIN tb_location_asset l 
-        ON SUBSTRING_INDEX(SUBSTRING_INDEX(d.AssetCode, '/', 2), '-', -1) = l.location_code
-      WHERE d.NoSO = ?
-      GROUP BY LocationCode, l.location_name
-      ORDER BY LocationCode
+SELECT 
+  a.LocationAsset AS LocationCode,
+  a.LocationAsset AS LocationName,
+  COUNT(*) AS TotalAssets
+FROM tb_stockopname_d_hasil d
+LEFT JOIN asset a ON a.AssetCode = d.AssetCode
+LEFT JOIN tb_location_asset l ON l.location_code = a.LocationAsset
+WHERE d.NoSO = ?
+GROUP BY a.LocationAsset, l.location_name
+ORDER BY a.LocationAsset
     `, [noSO]);
 
     // Gabungkan semua lokasi unik dari ketiga kategori
@@ -687,7 +678,7 @@ router.get('/report/:noso/pdf', async (req, res) => {
         { text: 'Hasil Scan', width: colJumlahWidth },
         { text: 'Aset Tidak Ditemukan', width: colJumlahWidth },
         { text: 'Aset Tanpa QR Code', width: colJumlahWidth },
-        { text: 'Aset Tidak Terdaftar', width: colJumlahWidth }
+        { text: 'Aset Temuan', width: colJumlahWidth }
       ];      
     
       doc.font('Helvetica-Bold').fontSize(10);
@@ -813,19 +804,136 @@ router.get('/report/:noso/pdf', async (req, res) => {
         valign: 'bottom',
       });
     }
-    
 
-     doc.moveDown(5);
+     doc.moveDown(0.5);
 
-     let rowNumber = 1;
-     hasilBomPerLocation.forEach(loc => {
-      doc.font('Helvetica-Bold').fontSize(12).text(`III. BOM Asset Yang Tidak Lengkap`, doc.page.margins.left);
-      doc.moveDown(0.5);
-      doc.font('Helvetica-Bold').fontSize(12).text(`${rowNumber++}. Lokasi ${loc.locationName}`, doc.page.margins.left + 10);
-      doc.moveDown(0.2);
-      printAssetTableBOM(loc.assetList);
-    });
+    //  let rowNumber = 1;
+    //  hasilBomPerLocation.forEach(loc => {
+    //   doc.font('Helvetica-Bold').fontSize(12).text(`III. BOM Asset Yang Tidak Lengkap`, doc.page.margins.left);
+    //   doc.moveDown(0.5);
+    //   doc.font('Helvetica-Bold').fontSize(12).text(`${rowNumber++}. Lokasi ${loc.locationName}`, doc.page.margins.left + 10);
+    //   doc.moveDown(0.2);
+    //   printAssetTableBOM(loc.assetList);
+    // });
+
+
+
+    function printKomentarBox() {
+      const startX = doc.page.margins.left;
+      const boxWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const boxHeight = 100; // tinggi kotak komentar, bisa disesuaikan
     
+      const y = doc.y + 20; // beri jarak 20pt dari posisi y terakhir
+    
+      // Judul kolom komentar
+      doc.font('Helvetica-Bold').fontSize(12).text('III. Tanggapan PIC Terkait Selisih', startX, y);
+    
+      // Kotak kosong untuk tulis tangan
+      doc.rect(startX, y + 20, boxWidth, boxHeight).stroke();
+    
+      // Geser posisi y agar setelah kotak ini konten tidak overlap
+      doc.y = y + 20 + boxHeight + 10;
+    }
+
+    printKomentarBox(); // panggil fungsi buat kotak komentar
+
+
+    doc.moveDown(1);
+
+
+    function printJadwalRealisasiTable() {
+      const startX = doc.page.margins.left;
+      let y = doc.y + 20;
+
+      doc.font('Helvetica-Bold').fontSize(12).text('IV. Jadwal VS Realisasi SO');
+
+      const padding = 5;
+      const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    
+      const col1Width = tableWidth * 0.4; // Kolom kosong
+      const col2Width = tableWidth * 0.3; // Jadwal
+      const col3Width = tableWidth * 0.3; // Realisasi
+      const headerHeight = 20;
+      const rowHeight = 20;
+    
+      // Header
+      doc.font('Helvetica-Bold').fontSize(10);
+      const headers = [' ', 'Jadwal', 'Realisasi'];
+      let currentX = startX;
+      [col1Width, col2Width, col3Width].forEach((width, index) => {
+        doc.rect(currentX, y, width, headerHeight).stroke();
+        doc.text(headers[index], currentX + padding, y + padding, {
+          width: width - 2 * padding,
+          align: 'center',
+        });
+        currentX += width;
+      });
+    
+      y += headerHeight;
+    
+      // Isi baris
+      doc.font('Helvetica').fontSize(10);
+      currentX = startX;
+      const rowData = ['Stock Opname', tanggal, lockedDate];
+      [col1Width, col2Width, col3Width].forEach((width, index) => {
+        doc.rect(currentX, y, width, rowHeight).stroke();
+        doc.text(rowData[index], currentX + padding, y + padding, {
+          width: width - 2 * padding,
+          align: 'center',
+        });
+        currentX += width;
+      });
+    
+      doc.y = y + rowHeight + 10; // Update posisi y selanjutnya
+    }
+
+    printJadwalRealisasiTable();
+
+
+    function printTandaTanganBox() {
+      const startX = doc.page.margins.left;
+      const boxWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const boxHeight = 80;
+      const headerHeight = 20;
+      const padding = 5;
+      const y = doc.y + 20; // jarak aman dari elemen sebelumnya
+    
+      // Cek apakah cukup di 1 halaman, kalau tidak, tambah halaman
+      const requiredHeight = headerHeight + boxHeight + 30;
+      if (y + requiredHeight > doc.page.height - doc.page.margins.bottom) {
+        doc.addPage();
+      }
+    
+      // // Judul bagian
+      // doc.font('Helvetica-Bold').fontSize(12).text('IV. Tanda Tangan', startX, doc.y);
+    
+      const updatedY = doc.y + 10; // pindahkan sedikit ke bawah
+      const labels = ['Divisi Yang di SO', 'Pelaksana SO', 'Pendamping SO', 'Diketahui Oleh'];
+      const columnCount = labels.length;
+      const columnWidth = boxWidth / columnCount;
+    
+      // Loop untuk menggambar kotak tanda tangan sejajar
+      for (let i = 0; i < columnCount; i++) {
+        const currentX = startX + i * columnWidth;
+    
+        // Kotak label (header)
+        doc.font('Helvetica-Bold').fontSize(10);
+        doc.rect(currentX, updatedY, columnWidth, headerHeight).stroke();
+        doc.text(labels[i], currentX + padding, updatedY + padding, {
+          width: columnWidth - 2 * padding,
+          align: 'center'
+        });
+    
+        // Kotak tanda tangan
+        doc.rect(currentX, updatedY + headerHeight, columnWidth, boxHeight).stroke();
+      }
+    
+      // Update posisi y agar tidak tabrakan dengan elemen setelahnya
+      doc.y = updatedY + headerHeight + boxHeight + 10;
+    }
+    
+    
+    printTandaTanganBox();
 
 
     doc.end();

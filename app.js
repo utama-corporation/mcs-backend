@@ -5,13 +5,15 @@ const bodyParser = require('body-parser');
 const { connectDb } = require('./db');  // Menghubungkan ke database
 const http = require('http');  // Untuk membuat server HTTP
 const { wss } = require('./websocket'); // Import dari root
-const authRoutes = require('./routes/authRoutes');  // Rute untuk autentikasi
-const stockOpnameRoutes = require('./routes/stockOpnameRoutes');  // Rute untuk autentikasi
-const masterRoutes = require('./routes/masterRoutes');  // Rute untuk autentikasi
-const uploadImgRoutes = require('./routes/uploadImgRoutes');
-const laporanRoutes = require('./routes/laporanRoutes');
 
-
+const authRoutes = require('./src/routes/authRoutes');
+const validateAssetStockOpnameRoutes = require('./src/routes/validateAssetStockOpnameRoutes');
+const masterRoutes = require('./src/routes/masterRoutes');
+const uploadAssetImgRoutes = require('./src/routes/uploadAssetImgRoutes');
+const laporanStockOpnameRoutes = require('./src/routes/laporanStockOpnameRoutes');
+const headerStockOpnameRoutes = require('./src/routes/headerStockOpnameRoutes');
+const assetsStockOpnameRoutes = require('./src/routes/assetsStockOpnameRoutes');
+const nonAssetsStockOpnameRoutes = require('./src/routes/nonAssetsStockOpnameRoutes');
 
 const app = express();
 const server = http.createServer(app);  // Membuat server HTTP menggunakan express
@@ -31,8 +33,6 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-
-
 const port = process.env.PORT || 6000;  // Menggunakan port dari .env atau default 5000
 
 // Middleware untuk parsing JSON dari body request
@@ -45,16 +45,21 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // Menggunakan rute autentikasi dan stock opname
-app.use('/api', authRoutes);  // Rute autentikasi
+app.use('/api', authRoutes);  
 
-app.use('/api', stockOpnameRoutes);  // Rute autentikasi
+app.use('/api', validateAssetStockOpnameRoutes);  
 
 app.use('/api', masterRoutes);  
 
-app.use('/api', uploadImgRoutes);
+app.use('/api', uploadAssetImgRoutes);
 
-app.use('/api', laporanRoutes);
+app.use('/api', laporanStockOpnameRoutes);
 
+app.use('/api', headerStockOpnameRoutes);
+
+app.use('/api', assetsStockOpnameRoutes);
+
+app.use('/api', nonAssetsStockOpnameRoutes)
 
 
 // Panggil connectDb sebelum server.listen

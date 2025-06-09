@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');  // Import crypto for MD5 hashing
 const jwt = require('jsonwebtoken');
 const router = express.Router();
-const { pool, connectDb } = require('../db');  // Import database connection
+const { pool, connectDb } = require('../../db');  // Import database connection
 
 // Function to hash the password using MD5
 function hashPassword(password) {
