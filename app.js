@@ -13,7 +13,10 @@ const uploadAssetImgRoutes = require('./src/routes/uploadAssetImgRoutes');
 const laporanStockOpnameRoutes = require('./src/routes/laporanStockOpnameRoutes');
 const headerStockOpnameRoutes = require('./src/routes/headerStockOpnameRoutes');
 const assetsStockOpnameRoutes = require('./src/routes/assetsStockOpnameRoutes');
+const assetsBOMStockOpnameRoutes = require('./src/routes/assetsBOMStockOpnameRoutes');
 const nonAssetsStockOpnameRoutes = require('./src/routes/nonAssetsStockOpnameRoutes');
+const laporanStockOpnameBOMRoutes = require('./src/routes/laporanStockOpnameBOMRoutes');
+const nonPartsStockOpnameRoutes = require('./src/routes/nonPartsStockOpnameRoutes');
 
 const app = express();
 const server = http.createServer(app);  // Membuat server HTTP menggunakan express
@@ -59,7 +62,13 @@ app.use('/api', headerStockOpnameRoutes);
 
 app.use('/api', assetsStockOpnameRoutes);
 
-app.use('/api', nonAssetsStockOpnameRoutes)
+app.use('/api', assetsBOMStockOpnameRoutes);
+
+app.use('/api', nonAssetsStockOpnameRoutes);
+
+app.use('/api', laporanStockOpnameBOMRoutes);
+
+app.use('/api', nonPartsStockOpnameRoutes);
 
 
 // Panggil connectDb sebelum server.listen
