@@ -291,8 +291,9 @@ router.delete("/no-stock-opname/delete", verifyToken, async (req, res) => {
         await deleteDetails('tb_stockopname_d');
         await deleteDetails('tb_stockopname_d_hasil');
         await deleteDetails('tb_stockopname_non_assets');
+        await deleteDetails('tb_stockopname_non_parts');
         await deleteDetails('tb_stockopname_hasil_bom');
-  
+
   
         // Hapus header
         const [result] = await pool.query(`DELETE FROM tb_stockopname_h WHERE NoSO IN (?)`, [NoSO]);
