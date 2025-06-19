@@ -9,7 +9,7 @@ const { renderNonPartTable } = require('./sections/non-part-stock-opname-table')
 
 
 async function generateStockOpnameBomPdf(res, metadata) {
-  const { noSO, tanggal = '-', perusahaan = '-', lokasi = '-' , lockedDate = '-'} = metadata;
+  const { noSO } = metadata;
 
   const doc = new PDFDocument({ margin: 40, size: 'A4' });
   doc.pipe(res);
@@ -17,7 +17,7 @@ async function generateStockOpnameBomPdf(res, metadata) {
   doc.fontSize(16).font('Helvetica-Bold').text('BERITA ACARA STOCK OPNAME', { align: 'center' });
   doc.moveDown(1.5);
 
-  renderHeaderInfo(doc, { tanggal, perusahaan, lokasi });
+  await renderHeaderInfo(doc, noSO);
 
   doc.moveDown(1);
 
@@ -33,7 +33,7 @@ async function generateStockOpnameBomPdf(res, metadata) {
 
   doc.moveDown(1.5);
 
-  renderJadwalRealisasiTable(doc, tanggal, lockedDate); 
+  await renderJadwalRealisasiTable(doc, noSO); 
 
   doc.moveDown(2);
 

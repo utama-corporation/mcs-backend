@@ -65,7 +65,7 @@ async function renderNonPartTable(doc, noSO) {
     if (!combinedRows.length) {
       doc.fontSize(10)
          .font('Helvetica-Oblique')
-         .text('Tidak ada data tambahan atau selisih fisik.', startX, y);
+         .text('Tidak ditemukan adanya data tambahan atau kelebihan jumlah fisik.', startX, y);
       doc.y = y + 20;
       return;
     }
