@@ -56,13 +56,11 @@ async function renderNonPartTable(doc, noSO) {
   
     let y = doc.y + 20;
   
-    doc.fontSize(13)
-       .font('Helvetica-Bold')
-       .text('II. Alat Kerja Diluar Daftar SO ', startX, y, { align: 'left' });
-  
-    y += 20;
-  
     if (!combinedRows.length) {
+      doc.fontSize(13)
+         .font('Helvetica-Bold')
+         .text('II. Alat Kerja Diluar Daftar SO ', startX, y, { align: 'left' });
+      y += 20;
       doc.fontSize(10)
          .font('Helvetica-Oblique')
          .text('Tidak ditemukan adanya data tambahan atau kelebihan jumlah fisik.', startX, y);
@@ -70,12 +68,37 @@ async function renderNonPartTable(doc, noSO) {
       return;
     }
   
-    doc.fontSize(10).font('Helvetica-Bold');
-  
-    // Header
+    // Hitung tinggi yang dibutuhkan untuk judul + header + minimal 1 baris data
+    const titleHeight = 20; // tinggi untuk judul + spacing
     const headerMaxHeight = Math.max(...headers.map((h, i) => getTextHeight(doc, h, { width: colWidths[i] - 6 })));
     const headerRowHeight = headerMaxHeight + 10;
+    
+    // Hitung tinggi minimum untuk baris data pertama
+    const firstRowData = [
+      '1',
+      combinedRows[0].name || '-',
+      formatQty(combinedRows[0].qty ?? '-'),
+      combinedRows[0].remark || '-'
+    ];
+    const firstRowMaxHeight = Math.max(...firstRowData.map((d, i) => getTextHeight(doc, d, { width: colWidths[i] - 6 })));
+    const firstRowHeight = firstRowMaxHeight + 10;
   
+    // Cek apakah judul + header + minimal 1 baris data muat di halaman saat ini
+    const requiredHeight = titleHeight + headerRowHeight + firstRowHeight;
+    if (y + requiredHeight > doc.page.height - doc.page.margins.bottom) {
+      doc.addPage(); 
+      y = 40;
+    }
+  
+    // Render judul
+    doc.fontSize(13)
+       .font('Helvetica-Bold')
+       .text('II. Alat Kerja Diluar Daftar SO ', startX, y, { align: 'left' });
+  
+    y += 20;
+    doc.fontSize(10).font('Helvetica-Bold');
+  
+    // Render header
     let x = startX;
     for (let i = 0; i < headers.length; i++) {
       doc.rect(x, y, colWidths[i], headerRowHeight).stroke();
@@ -106,8 +129,10 @@ async function renderNonPartTable(doc, noSO) {
       const maxHeight = Math.max(...data.map((d, i) => getTextHeight(doc, d, { width: colWidths[i] - 6 })));
       const rowHeight = maxHeight + 10;
   
+      // Cek apakah baris data muat di halaman saat ini
       if (y + rowHeight > doc.page.height - doc.page.margins.bottom) {
-        doc.addPage(); y = 40;
+        doc.addPage(); 
+        y = 40;
       }
   
       x = startX;
@@ -133,7 +158,8 @@ async function renderNonPartTable(doc, noSO) {
     const totalRowHeight = labelHeight + 10;
   
     if (y + totalRowHeight > doc.page.height - doc.page.margins.bottom) {
-      doc.addPage(); y = 40;
+      doc.addPage(); 
+      y = 40;
     }
   
     x = startX;

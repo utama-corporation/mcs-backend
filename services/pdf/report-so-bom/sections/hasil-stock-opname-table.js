@@ -95,17 +95,15 @@ async function renderHasilStockOpnameTable(doc, noSO) {
 
       totalSistem += sistem;
       totalFisik += fisik;
+      totalSelisih += selisihValue; // Perhitungan total selisih normal
 
-      // Logika total selisih sesuai permintaan
-      if (selisihValue > 0) {
-        totalSelisih -= selisihValue;
-      } else {
-        totalSelisih += Math.abs(selisihValue);
-      }
-
+      // Tampilan selisih dengan tanda + dan -
       let selisihDisplay = '0';
-      if (selisihValue > 0) selisihDisplay = `+${selisihValue}`;
-      else if (selisihValue < 0) selisihDisplay = `${Math.abs(selisihValue)}`;
+      if (selisihValue > 0) {
+        selisihDisplay = `+${formatQty(selisihValue)}`;
+      } else if (selisihValue < 0) {
+        selisihDisplay = `-${formatQty(Math.abs(selisihValue))}`;
+      }
 
       const remark = selisihValue === 0 ? 'Sesuai' : (row.Remark || '-');
 
@@ -145,10 +143,19 @@ async function renderHasilStockOpnameTable(doc, noSO) {
 
    // Baris TOTAL
    const totalLabel = 'TOTAL';
+   
+   // Tampilan total selisih dengan tanda + dan -
+   let totalSelisihDisplay = '0';
+   if (totalSelisih > 0) {
+     totalSelisihDisplay = `+${formatQty(totalSelisih)}`;
+   } else if (totalSelisih < 0) {
+     totalSelisihDisplay = `-${formatQty(Math.abs(totalSelisih))}`;
+   }
+   
    const totalData = [
      formatQty(totalSistem),
      formatQty(totalFisik),
-     String(totalSelisih),
+     totalSelisihDisplay,
      ''
    ];
 
@@ -186,6 +193,4 @@ async function renderHasilStockOpnameTable(doc, noSO) {
   }
 }
 
-
-  module.exports = { renderHasilStockOpnameTable };
-  
+module.exports = { renderHasilStockOpnameTable };

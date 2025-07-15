@@ -51,14 +51,49 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
       AssetCode = extracted.assetCode;
       responsePayload.data.assetCode = extracted.assetCode;
       responsePayload.data.assetName = extracted.assetName;
+      responsePayload.data.companyName = extracted.companyName;
+      responsePayload.data.categoryName = extracted.categoryName;
+      responsePayload.data.locationName = extracted.locationName;
+
+       // Konversi nama-nama menjadi kode
+  try {
+    // Query untuk mendapatkan kode dari nama
+    const codeQuery = `
+      SELECT 
+        (SELECT id_company FROM tb_company WHERE company_name = ? LIMIT 1) AS companyCode,
+        (SELECT category_code FROM tb_category_asset WHERE category_name = ? LIMIT 1) AS categoryCode,
+        (SELECT location_code FROM tb_location_asset WHERE location_name = ? LIMIT 1) AS locationCode
+    `;
+    
+    const [codeResults] = await pool.query(codeQuery, [
+      extracted.companyName,
+      extracted.categoryName,
+      extracted.locationName
+    ]);
+
+    // Jika ada data yang tidak ditemukan
+    if (!codeResults[0].companyCode || !codeResults[0].categoryCode || !codeResults[0].locationCode) {
+      responsePayload.status = "FAILED";
+      responsePayload.message = "Data referensi tidak ditemukan";
+      return res.status(400).json(responsePayload);
+    }
+
+    companyCode = codeResults[0].companyCode;
+    categoryCode = codeResults[0].categoryCode;
+    locationCode = codeResults[0].locationCode;
+
+  } catch (error) {
+    console.error("Error converting names to codes:", error);
+    responsePayload.status = "FAILED";
+    responsePayload.message = "Gagal mengkonversi data referensi";
+    return res.status(500).json(responsePayload);
+  }
+
+
     } else {
       return res.status(404).json({ message: "AssetCode tidak terdaftar!" });
     }
 
-    // Parsing kode
-    const companyCode = AssetCode.split('/')[0];
-    const categoryCode = AssetCode.split('/')[1]?.split('-')[0];
-    const locationCode = AssetCode.split('/')[1]?.split('-')[1];
 
     if (!companyCode || !categoryCode || !locationCode) {
       responsePayload.status = "FAILED";
@@ -277,11 +312,20 @@ async function fetchAssetDataFromPage(url) {
     // Ambil AssetName dari elemen yang sesuai
     const assetName = $("#AssetNameTable").text().trim() || $("span.asset-name").text().trim();
 
+
+    const companyName = $("#CompanyNameTable").text().trim() || $("span.asset-company").text().trim();
+
+    const categoryName = $("#CategoryAssetTable").text().trim() || $("span.asset-category").text().trim();
+
+    const locationName = $("#LocationAssetTable").text().trim() || $("span.asset-location").text().trim();
+
+
+
     if (!assetCode || !assetName) {
       throw new Error("AssetCode atau AssetName tidak ditemukan dalam halaman web.");
     }
 
-    return { assetCode, assetName };
+    return { assetCode, assetName, companyName, categoryName, locationName };
   } catch (error) {
     console.error("❌ Error mengambil data Asset dari halaman:", error.message);
     return null;
