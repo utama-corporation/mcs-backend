@@ -134,40 +134,62 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
         );
         
   
-        // 6. Insert AssetCode ke tabel `tb_stockopname_d`
-        if (assets.length > 0) {
-          console.log("✅ Nilai IsBOM:", IsBOM); // ⬅️ Log nilai IsBOM
-  
-          let finalAssets = assets;
-  
-          if (IsBOM) {
-            console.log("🔍 IsBOM aktif, filter asset berdasarkan tb_parts_bom...");
-  
-            // Ambil daftar AssetCode yang ada di tb_parts_bom
-            const [bomAssets] = await pool.query(
-              `SELECT AssetCode FROM tb_parts_bom WHERE AssetCode IN (?)`,
-              [assets.map(asset => asset.AssetCode)]
-            );
-  
-            const bomAssetCodes = new Set(bomAssets.map(item => item.AssetCode));
-  
-            // Filter hanya AssetCode yang ada di bomAssetCodes
-            finalAssets = assets.filter(asset => bomAssetCodes.has(asset.AssetCode));
-            console.log("🧾 AssetCode yang lolos filter BOM:", finalAssets.map(a => a.AssetCode));
-          }
-  
-          if (finalAssets.length > 0) {
-            const assetInsertSql = `
-              INSERT INTO tb_stockopname_d (NoSO, AssetCode) 
-              VALUES ?
-            `;
-            const assetValues = finalAssets.map(asset => [newNoSO, asset.AssetCode]);
-            await pool.query(assetInsertSql, [assetValues]);
-            console.log('✅ Data successfully inserted into tb_stockopname_d!');
-          } else {
-            console.log('⚠️ Tidak ada AssetCode yang cocok dengan BOM. Tidak ada data yang diinsert ke tb_stockopname_d.');
-          }
-        }
+// 6. Insert AssetCode ke tabel `tb_stockopname_bom`
+if (assets.length > 0) {
+  console.log("✅ Nilai IsBOM:", IsBOM);
+
+  let finalAssets = [];
+
+  if (IsBOM) {
+    console.log("🔍 IsBOM aktif, ambil semua parts dari tb_parts_bom...");
+
+    // Ambil semua part untuk AssetCode yang ada di assets
+    const [bomAssets] = await pool.query(
+      `SELECT AssetCode, id AS IdBOM, qty_on_hand AS Qty, uom 
+       FROM tb_parts_bom 
+       WHERE AssetCode IN (?)`,
+      [assets.map(asset => asset.AssetCode)]
+    );
+
+    // Masukkan semua parts ke finalAssets langsung
+    finalAssets = bomAssets.map(item => ({
+      AssetCode: item.AssetCode,
+      IdBOM: item.IdBOM,
+      Qty: item.Qty,
+      uom: item.uom
+    }));
+
+    console.log(`🧾 Total parts yang diambil dari tb_parts_bom: ${finalAssets.length}`);
+  } else {
+    // Jika IsBOM false, mungkin ingin tetap insert asset tanpa detail parts
+    finalAssets = assets.map(asset => ({
+      AssetCode: asset.AssetCode,
+      IdBOM: null,
+      Qty: null,
+      uom: null
+    }));
+  }
+
+  if (finalAssets.length > 0) {
+    const assetInsertSql = `
+      INSERT INTO tb_stockopname_bom (NoSO, AssetCode, IdBOM, Qty, uom) 
+      VALUES ?
+    `;
+    const assetValues = finalAssets.map(asset => [
+      newNoSO,
+      asset.AssetCode,
+      asset.IdBOM,
+      asset.Qty,
+      asset.uom
+    ]);
+    await pool.query(assetInsertSql, [assetValues]);
+    console.log('✅ Data successfully inserted into tb_stockopname_bom!');
+  } else {
+    console.log('⚠️ Tidak ada data parts yang akan diinsert ke tb_stockopname_bom.');
+  }
+}
+
+
   
         // Commit transaction
         await pool.query("COMMIT");

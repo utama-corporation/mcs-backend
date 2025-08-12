@@ -36,7 +36,7 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
-const port = process.env.PORT || 4000;  // Menggunakan port dari .env atau default 5000
+const port = process.env.PORT || 6000;  // Menggunakan port dari .env atau default 5000
 
 // Middleware untuk parsing JSON dari body request
 app.use(express.json());

@@ -25,38 +25,52 @@ router.get('/no-stock-opname-current-bom/:noso', verifyToken, async (req, res) =
     const categoryQuery = req.query.category;
     const locationQuery = req.query.location;
 
-    // Base condition - NoSO wajib dan belum discan
-    let filterConditions = 'd.NoSO = ? AND h.AssetCode IS NULL';
-    const queryParams = [noso];
+    // 1. Ambil assetCode unik dari tb_stockopname_bom berdasarkan NoSO + filter dari tabel asset
+    let filterConditions = 'b.NoSO = ?';
+    const filterParams = [noso];
 
-    // ✅ Filter Company (based on asset.CompanyName)
     if (companyQuery) {
-      const companyList = companyQuery.split(',').map(c => c.trim());
-      const companyConditions = companyList.map(() => `a.CompanyName = ?`).join(' OR ');
-      filterConditions += ` AND (${companyConditions})`;
-      queryParams.push(...companyList);
+      const companies = companyQuery.split(',').map(c => c.trim());
+      const companyConds = companies.map(() => `a.CompanyName = ?`).join(' OR ');
+      filterConditions += ` AND (${companyConds})`;
+      filterParams.push(...companies);
     }
-
-    // ✅ Filter Category (based on asset.CategoryAsset)
     if (categoryQuery) {
-      const categoryList = categoryQuery.split(',').map(c => c.trim());
-      const categoryConditions = categoryList.map(() => `a.CategoryAsset = ?`).join(' OR ');
-      filterConditions += ` AND (${categoryConditions})`;
-      queryParams.push(...categoryList);
+      const categories = categoryQuery.split(',').map(c => c.trim());
+      const categoryConds = categories.map(() => `a.CategoryAsset = ?`).join(' OR ');
+      filterConditions += ` AND (${categoryConds})`;
+      filterParams.push(...categories);
     }
-
-    // ✅ Filter Location (based on asset.LocationAsset)
     if (locationQuery) {
-      const locationList = locationQuery.split(',').map(l => l.trim());
-      const locationConditions = locationList.map(() => `a.LocationAsset = ?`).join(' OR ');
-      filterConditions += ` AND (${locationConditions})`;
-      queryParams.push(...locationList);
+      const locations = locationQuery.split(',').map(l => l.trim());
+      const locationConds = locations.map(() => `a.LocationAsset = ?`).join(' OR ');
+      filterConditions += ` AND (${locationConds})`;
+      filterParams.push(...locations);
     }
 
-    // Query data dengan LEFT JOIN ke tabel hasil dan asset
+    // Ambil assetCode unik dengan paging
+    const [assetCodesRows] = await pool.query(
+      `SELECT DISTINCT b.AssetCode 
+       FROM tb_stockopname_bom b 
+       LEFT JOIN asset a ON b.AssetCode = a.AssetCode 
+       WHERE ${filterConditions} 
+       ORDER BY b.AssetCode DESC 
+       LIMIT ? OFFSET ?`,
+      [...filterParams, limit, offset]
+    );
+
+    const assetCodes = assetCodesRows.map(row => row.AssetCode);
+
+    if (assetCodes.length === 0) {
+      return res.status(404).json({
+        message: `Tidak ada asset BOM untuk NoSO: ${noso} dengan filter yang diberikan`
+      });
+    }
+
+    // 2. Query detail asset (mirip seperti query lama dari tb_stockopname_d, tapi sekarang dari asset)
     const dataQuery = `
       SELECT 
-        d.AssetCode, 
+        a.AssetCode, 
         a.AssetName, 
         d.HasNotBeenPrinted, 
         d.Image, 
@@ -66,9 +80,8 @@ router.get('/no-stock-opname-current-bom/:noso', verifyToken, async (req, res) =
         a.CategoryAsset,
         a.LocationAsset,
         att.filename
-      FROM tb_stockopname_d d
-      LEFT JOIN tb_stockopname_d_hasil h ON d.AssetCode = h.AssetCode AND d.NoSO = h.NoSO
-      LEFT JOIN asset a ON d.AssetCode = a.AssetCode
+      FROM asset a
+      LEFT JOIN tb_stockopname_d d ON a.AssetCode = d.AssetCode AND d.NoSO = ?
       LEFT JOIN tb_so_status s ON d.id_status = s.id_status
       LEFT JOIN tb_user u ON d.id_user = u.id_user
       LEFT JOIN (
@@ -84,77 +97,62 @@ router.get('/no-stock-opname-current-bom/:noso', verifyToken, async (req, res) =
           WHERE filename <> '' AND filename REGEXP '\\.(jpg|jpeg|png|gif|bmp|webp)$'
         ) t
         WHERE rn = 1
-      ) att ON d.AssetCode = att.AssetCode
-      WHERE ${filterConditions}
-      ORDER BY d.AssetCode DESC
-      LIMIT ? OFFSET ?
+      ) att ON a.AssetCode = att.AssetCode
+      WHERE a.AssetCode IN (?)
+      ORDER BY a.AssetCode DESC
     `;
 
-    const dataParams = [...queryParams, limit, offset];
+    const [rows] = await pool.query(dataQuery, [noso, assetCodes]);
 
-    // Query total count
-    const countQuery = `
-      SELECT COUNT(*) as total
-      FROM tb_stockopname_d d
-      LEFT JOIN tb_stockopname_d_hasil h ON d.AssetCode = h.AssetCode AND d.NoSO = h.NoSO
-      LEFT JOIN asset a ON d.AssetCode = a.AssetCode
-      WHERE ${filterConditions}
-    `;
+    // 3. Hitung partsCount dari tb_stockopname_bom (bukan tb_parts_bom)
+    let bomCountMap = {};
+    if (assetCodes.length > 0) {
+      const [bomCounts] = await pool.query(`
+        SELECT AssetCode, COUNT(*) as partsCount
+        FROM tb_stockopname_bom
+        WHERE AssetCode IN (?) AND NoSO = ?
+        GROUP BY AssetCode
+      `, [assetCodes, noso]);
 
-    const [rows] = await pool.query(dataQuery, dataParams);
-
-    const assetCodes = rows.map(row => row.AssetCode);
-
-let bomCountMap = {};
-if (assetCodes.length > 0) {
-  const [bomCounts] = await pool.query(`
-    SELECT AssetCode, COUNT(*) as partsCount
-    FROM tb_parts_bom
-    WHERE AssetCode IN (?) AND level <> 'relationship'
-    GROUP BY AssetCode
-  `, [assetCodes]);
-
-  // Simpan count ke dalam map
-  bomCountMap = bomCounts.reduce((acc, item) => {
-    acc[item.AssetCode] = item.partsCount;
-    return acc;
-  }, {});
-}
-
-let bomQtyFoundMap = {};
-if (assetCodes.length > 0) {
-  const [foundCounts] = await pool.query(`
-    SELECT AssetCode, COUNT(*) as totalFound
-    FROM tb_stockopname_hasil_bom
-    WHERE AssetCode IN (?) AND NoSO = ? 
-    GROUP BY AssetCode
-  `, [assetCodes, noso]);
-
-  bomQtyFoundMap = foundCounts.reduce((acc, item) => {
-    acc[item.AssetCode] = parseInt(item.totalFound) || 0; 
-    return acc;
-  }, {});
-
-}
-
-
-
-// Tambahkan jumlah parts ke setiap row
-rows.forEach(row => {
-  row.partsCount = bomCountMap[row.AssetCode] || 0;
-  row.qtyFound = bomQtyFoundMap[row.AssetCode] || 0; 
-
-});
-
-    const [countResult] = await pool.query(countQuery, queryParams);
-    const total = countResult[0]?.total || 0;
-
-    if (rows.length === 0) {
-      return res.status(404).json({ 
-        message: `Tidak ada data asset yang belum discan untuk NoSO: ${noso}` 
-      });
+      bomCountMap = bomCounts.reduce((acc, item) => {
+        acc[item.AssetCode] = item.partsCount;
+        return acc;
+      }, {});
     }
 
+    // 4. Hitung qtyFound (jumlah parts yang ditemukan) dari tb_stockopname_hasil_bom
+    let bomQtyFoundMap = {};
+    if (assetCodes.length > 0) {
+      const [foundCounts] = await pool.query(`
+        SELECT AssetCode, COUNT(*) as totalFound
+        FROM tb_stockopname_hasil_bom
+        WHERE AssetCode IN (?) AND NoSO = ?
+        GROUP BY AssetCode
+      `, [assetCodes, noso]);
+
+      bomQtyFoundMap = foundCounts.reduce((acc, item) => {
+        acc[item.AssetCode] = parseInt(item.totalFound) || 0;
+        return acc;
+      }, {});
+    }
+
+    // 5. Pasangkan partsCount dan qtyFound ke setiap row
+    rows.forEach(row => {
+      row.partsCount = bomCountMap[row.AssetCode] || 0;
+      row.qtyFound = bomQtyFoundMap[row.AssetCode] || 0;
+    });
+
+    // 6. Hitung total untuk pagination
+    const [countResult] = await pool.query(`
+      SELECT COUNT(DISTINCT b.AssetCode) as total
+      FROM tb_stockopname_bom b
+      LEFT JOIN asset a ON b.AssetCode = a.AssetCode
+      WHERE ${filterConditions}
+    `, filterParams);
+
+    const total = countResult[0]?.total || 0;
+
+    // 7. Kirim response
     res.json({
       data: rows,
       total,
@@ -164,9 +162,9 @@ rows.forEach(row => {
 
   } catch (error) {
     console.error('Error:', error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       message: 'Internal Server Error',
-      error: error.message 
+      error: error.message
     });
   }
 });
