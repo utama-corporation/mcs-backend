@@ -14,20 +14,17 @@ async function renderHasilStockOpnameTable(doc, noSO) {
     SELECT 
       CONCAT(asset.AssetName, ' (', asset.AssetCode, ')') AS AssetCode,
       bom.part AS part_name,
-      bom.qty_on_hand,
+      so_bom.Qty AS qty_on_hand,
       hasil.QtyFound,
-      hasil.Remark
-    FROM tb_parts_bom bom
-    JOIN (
-      SELECT DISTINCT AssetCode
-      FROM tb_stockopname_d
-      WHERE NoSO = ?
-    ) stok ON bom.AssetCode = stok.AssetCode
-    LEFT JOIN tb_stockopname_hasil_bom hasil ON bom.id = hasil.IdBOM AND hasil.NoSO = ?
-    LEFT JOIN asset ON bom.AssetCode = asset.AssetCode
-    WHERE bom.level != 'relationship'
-    ORDER BY bom.AssetCode ASC, bom.part ASC
-  `, [noSO, noSO]);
+      hasil.Remark,
+      so_bom.uom
+    FROM tb_stockopname_bom so_bom
+    LEFT JOIN tb_parts_bom bom ON so_bom.IdBOM = bom.id AND bom.level != 'relationship'
+    LEFT JOIN tb_stockopname_hasil_bom hasil ON so_bom.IdBOM = hasil.IdBOM AND hasil.NoSO = so_bom.NoSO
+    LEFT JOIN asset ON so_bom.AssetCode = asset.AssetCode
+    WHERE so_bom.NoSO = ? AND bom.level != 'relationship'
+    ORDER BY so_bom.AssetCode ASC, bom.part ASC
+  `, [noSO]);
 
   if (!rows.length) {
     doc.text('Tidak ada data hasil stock opname.');
