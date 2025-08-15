@@ -311,7 +311,65 @@ router.get('/part-bom', async (req, res) => {
 });
 
 
-//SIMPAN HASIL BOM KE DB
+//SIMPAN HASIL BOM KE DB (SEMENTARA DI NONAKTIFKAN KARENA ADANYA PERUBAHAN RULES SAAT SUBMIT)
+// router.post('/submit-bom', verifyToken, async (req, res) => {
+//   try {
+//     await connectDb();
+
+//     const { noSO, assetCode, data } = req.body;
+//     const idUser = req.user?.id_user || null;
+
+//     if (!noSO || !assetCode || !Array.isArray(data)) {
+//       return res.status(400).json({ message: 'noSO, assetCode dan data (array) diperlukan.' });
+//     }
+
+//     if (data.length === 0) {
+//       return res.status(400).json({ message: 'Data BOM kosong.' });
+//     }
+
+//     // Mapping data untuk insert, termasuk Remark
+//     const values = data.map(item => [
+//       noSO,
+//       assetCode,
+//       item.idBOM,
+//       item.qtyFound,
+//       item.remark || null
+//     ]);
+
+//     // Simpan data hasil BOM
+//     const [result] = await pool.query(
+//       `INSERT INTO tb_stockopname_hasil_bom 
+//         (NoSO, AssetCode, IdBOM, QtyFound, Remark)
+//        VALUES ?`,
+//       [values]
+//     );
+
+//     // Update id_user pada tb_stockopname_d
+//     if (idUser) {
+//       await pool.query(
+//         `UPDATE tb_stockopname_d 
+//          SET id_user = ?
+//          WHERE NoSO = ? AND AssetCode = ?`,
+//         [idUser, noSO, assetCode]
+//       );
+//     }
+
+//     res.status(200).json({
+//       message: 'Data BOM berhasil disimpan dan id_user diperbarui.',
+//       insertedRows: result.affectedRows
+//     });
+
+//   } catch (error) {
+//     console.error('Gagal menyimpan data BOM:', error.message);
+//     res.status(500).json({
+//       message: 'Internal Server Error',
+//       error: error.message
+//     });
+//   }
+// });
+
+
+
 router.post('/submit-bom', verifyToken, async (req, res) => {
   try {
     await connectDb();
@@ -327,7 +385,7 @@ router.post('/submit-bom', verifyToken, async (req, res) => {
       return res.status(400).json({ message: 'Data BOM kosong.' });
     }
 
-    // Mapping data untuk insert, termasuk Remark
+    // Mapping data untuk UPSERT (update if exists)
     const values = data.map(item => [
       noSO,
       assetCode,
@@ -336,11 +394,13 @@ router.post('/submit-bom', verifyToken, async (req, res) => {
       item.remark || null
     ]);
 
-    // Simpan data hasil BOM
     const [result] = await pool.query(
       `INSERT INTO tb_stockopname_hasil_bom 
         (NoSO, AssetCode, IdBOM, QtyFound, Remark)
-       VALUES ?`,
+       VALUES ?
+       ON DUPLICATE KEY UPDATE 
+         QtyFound = VALUES(QtyFound),
+         Remark = VALUES(Remark)`,
       [values]
     );
 
@@ -355,12 +415,12 @@ router.post('/submit-bom', verifyToken, async (req, res) => {
     }
 
     res.status(200).json({
-      message: 'Data BOM berhasil disimpan dan id_user diperbarui.',
-      insertedRows: result.affectedRows
+      message: 'Data BOM berhasil diperbarui.',
+      affectedRows: result.affectedRows
     });
 
   } catch (error) {
-    console.error('Gagal menyimpan data BOM:', error.message);
+    console.error('Gagal mengupdate data BOM:', error.message);
     res.status(500).json({
       message: 'Internal Server Error',
       error: error.message
