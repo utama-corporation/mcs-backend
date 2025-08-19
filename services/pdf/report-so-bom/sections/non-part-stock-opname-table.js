@@ -53,9 +53,10 @@ async function renderNonPartTable(doc, noSO) {
     const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
     const colWidths = [30, 220, 100, tableWidth - (30 + 220 + 100)];
     const headers = ['No', 'Nama Alat Kerja', 'Jumlah Fisik', 'Keterangan'];
-  
+    const MINIMUM_BOTTOM_MARGIN = 80; // Margin minimum di bagian bawah halaman
+
     let y = doc.y + 20;
-  
+
     if (!combinedRows.length) {
       doc.fontSize(13)
          .font('Helvetica-Bold')
@@ -67,7 +68,7 @@ async function renderNonPartTable(doc, noSO) {
       doc.y = y + 20;
       return;
     }
-  
+
     // Hitung tinggi yang dibutuhkan untuk judul + header + minimal 1 baris data
     const titleHeight = 20; // tinggi untuk judul + spacing
     const headerMaxHeight = Math.max(...headers.map((h, i) => getTextHeight(doc, h, { width: colWidths[i] - 6 })));
@@ -82,22 +83,27 @@ async function renderNonPartTable(doc, noSO) {
     ];
     const firstRowMaxHeight = Math.max(...firstRowData.map((d, i) => getTextHeight(doc, d, { width: colWidths[i] - 6 })));
     const firstRowHeight = firstRowMaxHeight + 10;
-  
-    // Cek apakah judul + header + minimal 1 baris data muat di halaman saat ini
-    const requiredHeight = titleHeight + headerRowHeight + firstRowHeight;
-    if (y + requiredHeight > doc.page.height - doc.page.margins.bottom) {
+
+    // Hitung tinggi untuk total row
+    const totalLabel = 'TOTAL';
+    const totalLabelHeight = getTextHeight(doc, totalLabel, { width: colWidths[0] + colWidths[1] - 6 });
+    const totalRowHeight = totalLabelHeight + 10;
+
+    // Cek apakah judul + header + minimal 1 baris data + total row muat di halaman saat ini
+    const requiredHeight = titleHeight + headerRowHeight + firstRowHeight + totalRowHeight;
+    if (y + requiredHeight > doc.page.height - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN) {
       doc.addPage(); 
       y = 40;
     }
-  
+
     // Render judul
     doc.fontSize(13)
        .font('Helvetica-Bold')
        .text('II. Alat Kerja Diluar Daftar SO ', startX, y, { align: 'left' });
-  
+
     y += 20;
     doc.fontSize(10).font('Helvetica-Bold');
-  
+
     // Render header
     let x = startX;
     for (let i = 0; i < headers.length; i++) {
@@ -110,84 +116,94 @@ async function renderNonPartTable(doc, noSO) {
       x += colWidths[i];
     }
     y += headerRowHeight;
-  
+
     doc.font('Helvetica').fontSize(10);
     let nomor = 1;
     let totalQty = 0;
-  
-    for (const row of combinedRows) {
+
+    for (let i = 0; i < combinedRows.length; i++) {
+      const row = combinedRows[i];
+      const isLastRow = i === combinedRows.length - 1;
+      
       const qtyValue = parseFloat(row.qty) || 0;
       totalQty += qtyValue;
-  
+
       const data = [
         nomor.toString(),
         row.name || '-',
         formatQty(row.qty ?? '-'),
         row.remark || '-'
       ];
-  
+
       const maxHeight = Math.max(...data.map((d, i) => getTextHeight(doc, d, { width: colWidths[i] - 6 })));
       const rowHeight = maxHeight + 10;
-  
-      // Cek apakah baris data muat di halaman saat ini
-      if (y + rowHeight > doc.page.height - doc.page.margins.bottom) {
+
+      // Untuk baris terakhir, pastikan ada cukup ruang untuk baris data + total row
+      const spaceNeeded = isLastRow ? rowHeight + totalRowHeight + 20 : rowHeight;
+      
+      // Cek apakah baris data muat di halaman saat ini dengan margin yang cukup
+      if (y + spaceNeeded > doc.page.height - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN) {
         doc.addPage(); 
         y = 40;
+        
+        // Jika pindah halaman, render ulang header
+        doc.fontSize(10).font('Helvetica-Bold');
+        x = startX;
+        for (let j = 0; j < headers.length; j++) {
+          doc.rect(x, y, colWidths[j], headerRowHeight).stroke();
+          const textY = y + (headerRowHeight - getTextHeight(doc, headers[j], { width: colWidths[j] - 6 })) / 2;
+          doc.text(headers[j], x + 3, textY, {
+            width: colWidths[j] - 6,
+            align: 'center'
+          });
+          x += colWidths[j];
+        }
+        y += headerRowHeight;
+        doc.font('Helvetica').fontSize(10);
       }
-  
+
       x = startX;
-      for (let i = 0; i < data.length; i++) {
-        doc.rect(x, y, colWidths[i], rowHeight).stroke();
-        const align = i === 0 || i === 2 ? 'center' : 'left';
-        doc.text(data[i], x + 3, y + 5, {
-          width: colWidths[i] - 6,
+      for (let j = 0; j < data.length; j++) {
+        doc.rect(x, y, colWidths[j], rowHeight).stroke();
+        const align = j === 0 || j === 2 ? 'center' : 'left';
+        doc.text(data[j], x + 3, y + 5, {
+          width: colWidths[j] - 6,
           align
         });
-        x += colWidths[i];
+        x += colWidths[j];
       }
-  
+
       y += rowHeight;
       nomor++;
     }
-  
-    // Tambahkan Total PCS
-    const totalLabel = 'TOTAL';
+
+    // Tambahkan Total PCS - sudah dipastikan ada ruang yang cukup
     const totalQtyFormatted = formatQty(totalQty);
-  
-    const labelHeight = getTextHeight(doc, totalLabel, { width: colWidths[0] + colWidths[1] - 6 });
-    const totalRowHeight = labelHeight + 10;
-  
-    if (y + totalRowHeight > doc.page.height - doc.page.margins.bottom) {
-      doc.addPage(); 
-      y = 40;
-    }
-  
+
     x = startX;
     doc.font('Helvetica-Bold');
-  
+
     // Gabungkan kolom No dan Nama untuk Total Label
     doc.rect(x, y, colWidths[0] + colWidths[1], totalRowHeight).stroke();
     doc.text(totalLabel, x + 3, y + 5, {
       width: colWidths[0] + colWidths[1] - 6,
       align: 'center'
     });
-  
+
     x += colWidths[0] + colWidths[1];
-  
+
     // Kolom Total Qty
     doc.rect(x, y, colWidths[2], totalRowHeight).stroke();
     doc.text(totalQtyFormatted, x + 3, y + 5, {
       width: colWidths[2] - 6,
       align: 'center'
     });
-  
+
     // Kosongkan kolom terakhir
     x += colWidths[2];
     doc.rect(x, y, colWidths[3], totalRowHeight).stroke();
-  
+
     doc.y = y + totalRowHeight + 10;
-  }
-  
-  
+}
 
 module.exports = { renderNonPartTable };
