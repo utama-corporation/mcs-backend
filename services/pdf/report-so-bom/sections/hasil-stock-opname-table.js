@@ -9,7 +9,41 @@ function formatQty(value) {
   return Number.isInteger(number) ? number.toString() : number.toFixed(2).replace(/\.?0+$/, '');
 }
 
+// Fungsi untuk debug dan fix encoding issues
+function debugAndFixEncoding(text) {
+  // Hapus fungsi ini karena tidak digunakan lagi
+  return text;
+}
+
+// Fungsi untuk preserve spacing dan karakter whitespace dari database
+function preserveOriginalSpacing(text) {
+  if (!text) return '-';
+  
+  // Preserve semua whitespace characters (space, tab, non-breaking space, dll)
+  let cleanText = text;
+  
+  // Convert berbagai jenis whitespace ke regular space untuk konsistensi PDF
+  cleanText = cleanText
+    .replace(/\t/g, '    ')      // Tab ke 4 spaces
+    .replace(/\u00A0/g, ' ')     // Non-breaking space ke regular space
+    .replace(/\u2009/g, ' ')     // Thin space
+    .replace(/\u2007/g, ' ')     // Figure space
+    .replace(/\u2002/g, ' ')     // En space
+    .replace(/\u2003/g, ' ')     // Em space
+    .replace(/\u2000/g, ' ')     // En quad
+    .replace(/\u2001/g, ' ')     // Em quad
+    .replace(/\u2004/g, ' ')     // Three-per-em space
+    .replace(/\u2005/g, ' ')     // Four-per-em space
+    .replace(/\u2006/g, ' ')     // Six-per-em space
+    .replace(/\u2008/g, ' ')     // Punctuation space
+    .replace(/\u200A/g, ' ')     // Hair space
+    .replace(/\u205F/g, ' ');    // Medium mathematical space
+  
+  return cleanText;
+}
+
 async function renderHasilStockOpnameTable(doc, noSO) {
+  // Query sederhana tanpa CONVERT - ambil data asli
   const [rows] = await pool.query(`
     SELECT 
       CONCAT(asset.AssetName, ' (', asset.AssetCode, ')') AS AssetCode,
@@ -41,8 +75,17 @@ async function renderHasilStockOpnameTable(doc, noSO) {
 
   const grouped = {};
   rows.forEach(row => {
-    if (!grouped[row.AssetCode]) grouped[row.AssetCode] = [];
-    grouped[row.AssetCode].push(row);
+    // Preserve spacing asli dari database
+    const originalAssetCode = preserveOriginalSpacing(row.AssetCode);
+    // console.log('Processing AssetCode:', originalAssetCode);
+    
+    if (!grouped[originalAssetCode]) grouped[originalAssetCode] = [];
+    grouped[originalAssetCode].push({
+      ...row,
+      AssetCode: originalAssetCode,
+      part_name: preserveOriginalSpacing(row.part_name),
+      Remark: preserveOriginalSpacing(row.Remark)
+    });
   });
 
   const colX = [40, 70, 250, 310, 370, 430];
@@ -56,6 +99,7 @@ async function renderHasilStockOpnameTable(doc, noSO) {
       y = doc.y;
     }
 
+    // Tampilkan assetCode dengan spacing asli
     doc.fontSize(11).font('Helvetica').text(`${groupIndex}. ${assetCode}`, colX[0] + 5, y);
     y += 15;
 
@@ -65,7 +109,7 @@ async function renderHasilStockOpnameTable(doc, noSO) {
     let headerMaxHeight = 0;
     for (let i = 0; i < headers.length; i++) {
       const height = getTextHeight(doc, headers[i], { width: colWidths[i] - 6 });
-      if (height > headerMaxHeight) headerMaxHeight = height;
+      if (headerMaxHeight < height) headerMaxHeight = height;
     }
     const headerRowHeight = headerMaxHeight + 10;
 
@@ -92,9 +136,8 @@ async function renderHasilStockOpnameTable(doc, noSO) {
 
       totalSistem += sistem;
       totalFisik += fisik;
-      totalSelisih += selisihValue; // Perhitungan total selisih normal
+      totalSelisih += selisihValue;
 
-      // Tampilan selisih dengan tanda + dan -
       let selisihDisplay = '0';
       if (selisihValue > 0) {
         selisihDisplay = `+${formatQty(selisihValue)}`;
@@ -102,8 +145,13 @@ async function renderHasilStockOpnameTable(doc, noSO) {
         selisihDisplay = `-${formatQty(Math.abs(selisihValue))}`;
       }
 
-      const remark = selisihValue === 0 ? 'Sesuai' : (row.Remark || '-');
-
+      let remark;
+      if (selisihValue === 0) {
+        remark = row.Remark && row.Remark.trim() !== '' ? row.Remark : 'Sesuai';
+      } else {
+        remark = row.Remark || '-';
+      }
+      
       const data = [
         nomor,
         row.part_name || '-',
@@ -128,7 +176,10 @@ async function renderHasilStockOpnameTable(doc, noSO) {
       for (let i = 0; i < data.length; i++) {
         doc.rect(colX[i], y, colWidths[i], rowHeight).stroke();
         const centerAlignedCols = [0, 2, 3, 4];
-        doc.text(data[i], colX[i] + 3, y + 5, {
+        
+        // Pastikan semua text di-convert ke string yang aman
+        const safeText = String(data[i] || '');
+        doc.text(safeText, colX[i] + 3, y + 5, {
           width: colWidths[i] - 6,
           align: centerAlignedCols.includes(i) ? 'center' : 'left'
         });
@@ -138,54 +189,51 @@ async function renderHasilStockOpnameTable(doc, noSO) {
       nomor++;
     }
 
-   // Baris TOTAL
-   const totalLabel = 'TOTAL';
-   
-   // Tampilan total selisih dengan tanda + dan -
-   let totalSelisihDisplay = '0';
-   if (totalSelisih > 0) {
-     totalSelisihDisplay = `+${formatQty(totalSelisih)}`;
-   } else if (totalSelisih < 0) {
-     totalSelisihDisplay = `-${formatQty(Math.abs(totalSelisih))}`;
-   }
-   
-   const totalData = [
-     formatQty(totalSistem),
-     formatQty(totalFisik),
-     totalSelisihDisplay,
-     ''
-   ];
+    // Baris TOTAL (unchanged)
+    const totalLabel = 'TOTAL';
+    
+    let totalSelisihDisplay = '0';
+    if (totalSelisih > 0) {
+      totalSelisihDisplay = `+${formatQty(totalSelisih)}`;
+    } else if (totalSelisih < 0) {
+      totalSelisihDisplay = `-${formatQty(Math.abs(totalSelisih))}`;
+    }
+    
+    const totalData = [
+      formatQty(totalSistem),
+      formatQty(totalFisik),
+      totalSelisihDisplay,
+      ''
+    ];
 
-   let totalRowHeight = Math.max(
-     getTextHeight(doc, totalLabel, { width: colWidths[0] + colWidths[1] - 6 }),
-     ...totalData.map((d, i) => getTextHeight(doc, d, { width: colWidths[i + 2] - 6 }))
-   ) + 10;
+    let totalRowHeight = Math.max(
+      getTextHeight(doc, totalLabel, { width: colWidths[0] + colWidths[1] - 6 }),
+      ...totalData.map((d, i) => getTextHeight(doc, d, { width: colWidths[i + 2] - 6 }))
+    ) + 10;
 
-   if (y + totalRowHeight > 780) {
-     doc.addPage();
-     y = 40;
-   }
+    if (y + totalRowHeight > 780) {
+      doc.addPage();
+      y = 40;
+    }
 
-  // Gabung kolom No + Nama Alat Kerja
-  const mergedX = colX[0];
-  const mergedWidth = colWidths[0] + colWidths[1];
-  doc.rect(mergedX, y, mergedWidth, totalRowHeight).stroke();
-  doc.font('Helvetica-Bold').text(totalLabel, mergedX + 3, y + 5, {
-    width: mergedWidth - 6,
-    align: 'center'
-  });
-
-  // Kolom: Jumlah di Sistem, Jumlah Fisik, Selisih, Keterangan
-  for (let i = 0; i < totalData.length; i++) {
-    const colIndex = i + 2; // karena index 0 & 1 digabung
-    doc.rect(colX[colIndex], y, colWidths[colIndex], totalRowHeight).stroke();
-    doc.text(totalData[i], colX[colIndex] + 3, y + 5, {
-      width: colWidths[colIndex] - 6,
-      align: [2, 3, 4].includes(colIndex) ? 'center' : 'left'
+    const mergedX = colX[0];
+    const mergedWidth = colWidths[0] + colWidths[1];
+    doc.rect(mergedX, y, mergedWidth, totalRowHeight).stroke();
+    doc.font('Helvetica-Bold').text(totalLabel, mergedX + 3, y + 5, {
+      width: mergedWidth - 6,
+      align: 'center'
     });
-  }
 
-  y += totalRowHeight + 20;
+    for (let i = 0; i < totalData.length; i++) {
+      const colIndex = i + 2;
+      doc.rect(colX[colIndex], y, colWidths[colIndex], totalRowHeight).stroke();
+      doc.text(String(totalData[i]), colX[colIndex] + 3, y + 5, {
+        width: colWidths[colIndex] - 6,
+        align: [2, 3, 4].includes(colIndex) ? 'center' : 'left'
+      });
+    }
+
+    y += totalRowHeight + 20;
     groupIndex++;
   }
 }

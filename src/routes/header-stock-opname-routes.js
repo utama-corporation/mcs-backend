@@ -135,61 +135,86 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
         
   
 // 6. Insert AssetCode ke tabel `tb_stockopname_bom`
+// 6. Insert AssetCode ke tabel yang sesuai berdasarkan IsBOM
+// 6. Insert AssetCode ke tabel yang sesuai berdasarkan IsBOM
 if (assets.length > 0) {
   console.log("✅ Nilai IsBOM:", IsBOM);
 
-  let finalAssets = [];
-
   if (IsBOM) {
+    // IsBOM = true → Insert ke tb_stockopname_bom
     console.log("🔍 IsBOM aktif, ambil semua parts dari tb_parts_bom...");
 
-    // Ambil semua part untuk AssetCode yang ada di assets
+    // Ambil semua part untuk AssetCode yang ada di assets DAN ada di tb_parts_bom
+    const assetCodes = assets.map(asset => asset.AssetCode);
+    console.log("📋 AssetCodes dari tabel asset:", assetCodes);
+
     const [bomAssets] = await pool.query(
       `SELECT AssetCode, id AS IdBOM, qty_on_hand AS Qty, uom 
        FROM tb_parts_bom 
        WHERE AssetCode IN (?)`,
-      [assets.map(asset => asset.AssetCode)]
+      [assetCodes]
     );
 
-    // Masukkan semua parts ke finalAssets langsung
-    finalAssets = bomAssets.map(item => ({
-      AssetCode: item.AssetCode,
-      IdBOM: item.IdBOM,
-      Qty: item.Qty,
-      uom: item.uom
-    }));
+    console.log(`🧾 Parts ditemukan di tb_parts_bom: ${bomAssets.length}`);
+    
+    if (bomAssets.length > 0) {
+      // Log untuk melihat AssetCode mana yang ada di BOM
+      const bomAssetCodes = bomAssets.map(item => item.AssetCode);
+      const validAssetCodes = [...new Set(bomAssetCodes)]; // Remove duplicates
+      console.log("📋 AssetCodes yang ada di kedua tabel:", validAssetCodes);
 
-    console.log(`🧾 Total parts yang diambil dari tb_parts_bom: ${finalAssets.length}`);
+      // Insert ke tb_stockopname_bom dengan detail parts
+      const bomInsertSql = `
+        INSERT INTO tb_stockopname_bom (NoSO, AssetCode, IdBOM, Qty, uom) 
+        VALUES ?
+      `;
+      const bomValues = bomAssets.map(item => [
+        newNoSO,
+        item.AssetCode,
+        item.IdBOM,
+        item.Qty,
+        item.uom
+      ]);
+      
+      console.log("📊 Data yang akan diinsert ke tb_stockopname_bom:", bomValues.length, "records");
+      await pool.query(bomInsertSql, [bomValues]);
+      console.log(`✅ ${bomAssets.length} parts berhasil diinsert ke tb_stockopname_bom!`);
+      
+      // Log AssetCode yang tidak ada di tb_parts_bom
+      const missingAssetCodes = assetCodes.filter(code => !bomAssetCodes.includes(code));
+      if (missingAssetCodes.length > 0) {
+        console.log("⚠️ AssetCodes tidak ditemukan di tb_parts_bom:", missingAssetCodes);
+      }
+    } else {
+      console.log('⚠️ Tidak ada parts BOM yang ditemukan untuk assets ini.');
+      console.log('💡 Kemungkinan: AssetCode di tabel asset tidak ada yang terdaftar di tb_parts_bom');
+    }
+
   } else {
-    // Jika IsBOM false, mungkin ingin tetap insert asset tanpa detail parts
-    finalAssets = assets.map(asset => ({
-      AssetCode: asset.AssetCode,
-      IdBOM: null,
-      Qty: null,
-      uom: null
-    }));
-  }
+    // IsBOM = false → Insert ke tb_stockopname_d
+    console.log("🔍 IsBOM false, insert assets ke tb_stockopname_d...");
 
-  if (finalAssets.length > 0) {
-    const assetInsertSql = `
-      INSERT INTO tb_stockopname_bom (NoSO, AssetCode, IdBOM, Qty, uom) 
+    const detailInsertSql = `
+      INSERT INTO tb_stockopname_d (NoSO, AssetCode, HasNotBeenPrinted, Image, id_status, id_user) 
       VALUES ?
     `;
-    const assetValues = finalAssets.map(asset => [
+    
+    // Prepare values untuk tb_stockopname_d
+    const detailValues = assets.map(asset => [
       newNoSO,
       asset.AssetCode,
-      asset.IdBOM,
-      asset.Qty,
-      asset.uom
+      0, // HasNotBeenPrinted = 1 (belum dicetak)
+      null, // Image = null (belum ada gambar)
+      null, // id_status = null (belum ada status)
+      null  // id_user = null (atau bisa diisi dengan req.user.id jika ada)
     ]);
-    await pool.query(assetInsertSql, [assetValues]);
-    console.log('✅ Data successfully inserted into tb_stockopname_bom!');
-  } else {
-    console.log('⚠️ Tidak ada data parts yang akan diinsert ke tb_stockopname_bom.');
+    
+    await pool.query(detailInsertSql, [detailValues]);
+    console.log(`✅ ${assets.length} assets berhasil diinsert ke tb_stockopname_d!`);
   }
+} else {
+  console.log("⚠️ Tidak ada assets yang ditemukan - skip insert detail");
 }
-
-
   
         // Commit transaction
         await pool.query("COMMIT");
@@ -311,6 +336,7 @@ router.delete("/no-stock-opname/delete", verifyToken, async (req, res) => {
         await deleteDetails('tb_stockopname_dcategory');
         await deleteDetails('tb_stockopname_dlocation');
         await deleteDetails('tb_stockopname_d');
+        await deleteDetails('tb_stockopname_bom');
         await deleteDetails('tb_stockopname_d_hasil');
         await deleteDetails('tb_stockopname_non_assets');
         await deleteDetails('tb_stockopname_non_parts');
