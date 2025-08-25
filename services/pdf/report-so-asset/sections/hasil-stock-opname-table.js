@@ -2,6 +2,16 @@ const { pool } = require('../../../../db');
 
 // Fungsi untuk mengelompokkan semua data berdasarkan lokasi
 async function fetchGroupedByLocation(noSO) {
+  // Helper untuk normalisasi string
+  const cleanText = (text) => {
+    if (!text) return '';
+    return text
+      .toString()
+      .normalize("NFKC")         // normalisasi unicode
+      .replace(/\s+/g, " ")      // rapikan spasi ganda
+      .trim();                   // buang spasi depan/belakang
+  };
+
   // Query untuk asset tidak ditemukan
   const [notFoundRows] = await pool.query(
     `SELECT 
@@ -60,54 +70,54 @@ async function fetchGroupedByLocation(noSO) {
   
   // Kumpulkan semua data dan grup berdasarkan nama lokasi
   notFoundRows.forEach(row => {
-    const locationName = row.LocationName || row.LocationCode;
+    const locationName = cleanText(row.LocationName || row.LocationCode);
     if (!locationMap.has(locationName)) {
       locationMap.set(locationName, {
-        locationCode: row.LocationCode,
-        locationName: locationName,
+        locationCode: cleanText(row.LocationCode),
+        locationName,
         assetNotFound: [],
         assetWithoutQR: [],
         nonAssets: []
       });
     }
     locationMap.get(locationName).assetNotFound.push({
-      AssetCode: row.AssetCode,
-      AssetName: row.AssetName
+      AssetCode: cleanText(row.AssetCode),
+      AssetName: cleanText(row.AssetName)
     });
   });
 
   noQrRows.forEach(row => {
-    const locationName = row.LocationName || row.LocationCode;
+    const locationName = cleanText(row.LocationName || row.LocationCode);
     if (!locationMap.has(locationName)) {
       locationMap.set(locationName, {
-        locationCode: row.LocationCode,
-        locationName: locationName,
+        locationCode: cleanText(row.LocationCode),
+        locationName,
         assetNotFound: [],
         assetWithoutQR: [],
         nonAssets: []
       });
     }
     locationMap.get(locationName).assetWithoutQR.push({
-      AssetCode: row.AssetCode,
-      AssetName: row.AssetName,
-      Status: row.status
+      AssetCode: cleanText(row.AssetCode),
+      AssetName: cleanText(row.AssetName),
+      Status: cleanText(row.status)
     });
   });
 
   nonAssetRows.forEach(row => {
-    const locationName = row.LocationName || row.LocationCode;
+    const locationName = cleanText(row.LocationName || row.LocationCode);
     if (!locationMap.has(locationName)) {
       locationMap.set(locationName, {
-        locationCode: row.LocationCode,
-        locationName: locationName,
+        locationCode: cleanText(row.LocationCode),
+        locationName,
         assetNotFound: [],
         assetWithoutQR: [],
         nonAssets: []
       });
     }
     locationMap.get(locationName).nonAssets.push({
-      AssetName: row.non_asset_name,
-      Remark: row.remark
+      AssetName: cleanText(row.non_asset_name),
+      Remark: cleanText(row.remark)
     });
   });
 
