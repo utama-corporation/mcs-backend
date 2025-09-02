@@ -147,7 +147,7 @@ async function renderHasilStockOpnameTable(doc, noSO) {
 
       let remark;
       if (selisihValue === 0) {
-        remark = row.Remark && row.Remark.trim() !== '' ? row.Remark : 'Sesuai';
+        remark = row.Remark && row.Remark.trim() !== '-' ? row.Remark : 'Sesuai';
       } else {
         remark = row.Remark || '-';
       }
