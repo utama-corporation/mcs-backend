@@ -423,23 +423,25 @@ function printNonAssetTable(doc, items) {
 async function printAllGroupedByLocation(doc, noSO) {
   try {
     const groupedData = await fetchGroupedByLocation(noSO);
+
+        // TIDAK menambah halaman baru otomatis - melanjutkan dari posisi saat ini
+        doc.moveDown(1);
+
+        doc.x = doc.page.margins.left;
     
-    if (groupedData.length === 0) {
-      doc.font('Helvetica-Bold').fontSize(12).text('Tidak ada data untuk ditampilkan');
-      return;
-    }
+        doc
+        .font('Helvetica-Bold')
+        .fontSize(14)
+        .text('I. Hasil Stock Opname', { align: 'left' });
+    
+        doc.moveDown(0.5);
+    
+        if (groupedData.length === 0) {
+          doc.font('Helvetica-Oblique').fontSize(12).text('Tidak ada selisih');
+          return;
+        }
 
-    // TIDAK menambah halaman baru otomatis - melanjutkan dari posisi saat ini
-    doc.moveDown(1);
 
-    doc.x = doc.page.margins.left;
-
-    doc
-    .font('Helvetica-Bold')
-    .fontSize(14)
-    .text('I. Hasil Stock Opname', { align: 'left' });
-
-      doc.moveDown(0.5);
 
     groupedData.forEach((location, locationIdx) => {
       // Reset posisi X ke margin kiri sebelum setiap section

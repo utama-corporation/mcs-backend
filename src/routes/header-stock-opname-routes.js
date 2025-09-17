@@ -252,7 +252,7 @@ if (assets.length > 0) {
 router.get('/no-stock-opname', verifyToken, async (req, res) => {
   try {
     // Query the main table to get NoSO and Tanggal
-    const [rows] = await pool.query('SELECT NoSO, Tanggal, IsBOM, LockedDate FROM tb_stockopname_h');
+    const [rows] = await pool.query('SELECT NoSO, Tanggal, IsBOM, LockedDate FROM tb_stockopname_h ORDER BY NoSO DESC');
 
     // If no records are found, return 404 error
     if (rows.length === 0) {
