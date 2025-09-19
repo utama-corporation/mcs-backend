@@ -26,82 +26,67 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
     const Username = req.user?.username?.toUpperCase() || null;
 
     if (!AssetCode || !Username) {
-      return res.status(400).json({ message: "AssetCode dan Username wajib diisi" });
+      return res
+        .status(400)
+        .json({ message: "AssetCode dan Username wajib diisi" });
     }
 
-    // Default response yang ringkas
     const responsePayload = {
       message: "",
       status: "OK",
       data: {
         assetCode: null,
         assetName: null,
-        requiresChecklist: false,
-        parts: [],
-      }
+      },
     };
 
     // Handle jika AssetCode adalah URL
-    const isUrl = AssetCode.startsWith("http://") || AssetCode.startsWith("https://");
+    const isUrl =
+      AssetCode.startsWith("http://") || AssetCode.startsWith("https://");
     if (isUrl) {
       const extracted = await fetchAssetDataFromPage(AssetCode);
       if (!extracted) {
-        return res.status(400).json({ message: "Gagal mengambil data Asset dari halaman web." });
+        return res
+          .status(400)
+          .json({ message: "Gagal mengambil data Asset dari halaman web." });
       }
       AssetCode = extracted.assetCode;
       responsePayload.data.assetCode = extracted.assetCode;
       responsePayload.data.assetName = extracted.assetName;
-      responsePayload.data.companyName = extracted.companyName;
-      responsePayload.data.categoryName = extracted.categoryName;
-      responsePayload.data.locationName = extracted.locationName;
 
-       // Konversi nama-nama menjadi kode
-  try {
-    // Query untuk mendapatkan kode dari nama
-    const codeQuery = `
-      SELECT 
-        (SELECT id_company FROM tb_company WHERE company_name = ? LIMIT 1) AS companyCode,
-        (SELECT category_code FROM tb_category_asset WHERE category_name = ? LIMIT 1) AS categoryCode,
-        (SELECT location_code FROM tb_location_asset WHERE location_name = ? LIMIT 1) AS locationCode
-    `;
-    
-    const [codeResults] = await pool.query(codeQuery, [
-      extracted.companyName,
-      extracted.categoryName,
-      extracted.locationName
-    ]);
+      // Konversi nama ke kode
+      const codeQuery = `
+        SELECT 
+          (SELECT id_company FROM tb_company WHERE company_name = ? LIMIT 1) AS companyCode,
+          (SELECT category_code FROM tb_category_asset WHERE category_name = ? LIMIT 1) AS categoryCode,
+          (SELECT location_code FROM tb_location_asset WHERE location_name = ? LIMIT 1) AS locationCode
+      `;
+      const [codeResults] = await pool.query(codeQuery, [
+        extracted.companyName,
+        extracted.categoryName,
+        extracted.locationName,
+      ]);
 
-    // Jika ada data yang tidak ditemukan
-    if (!codeResults[0].companyCode || !codeResults[0].categoryCode || !codeResults[0].locationCode) {
-      responsePayload.status = "FAILED";
-      responsePayload.message = "Data referensi tidak ditemukan";
-      return res.status(400).json(responsePayload);
-    }
+      if (
+        !codeResults[0].companyCode ||
+        !codeResults[0].categoryCode ||
+        !codeResults[0].locationCode
+      ) {
+        responsePayload.status = "FAILED";
+        responsePayload.message = "Data referensi tidak ditemukan";
+        return res.status(400).json(responsePayload);
+      }
 
-    companyCode = codeResults[0].companyCode;
-    categoryCode = codeResults[0].categoryCode;
-    locationCode = codeResults[0].locationCode;
-
-  } catch (error) {
-    console.error("Error converting names to codes:", error);
-    responsePayload.status = "FAILED";
-    responsePayload.message = "Gagal mengkonversi data referensi";
-    return res.status(500).json(responsePayload);
-  }
-
-
+      companyCode = codeResults[0].companyCode;
+      categoryCode = codeResults[0].categoryCode;
+      locationCode = codeResults[0].locationCode;
     } else {
-      return res.status(404).json({ message: "AssetCode tidak terdaftar!" });
+      return res
+        .status(404)
+        .json({ message: "AssetCode tidak terdaftar!" });
     }
 
-
-    if (!companyCode || !categoryCode || !locationCode) {
-      responsePayload.status = "FAILED";
-      responsePayload.message = "Format AssetCode tidak valid";
-      return res.status(400).json(responsePayload);
-    }
-
-    // Validasi referensi (tetap cek, tapi tidak kirim ke client)
+    // Validasi referensi
     const validationQuery = `
       SELECT
         EXISTS (SELECT 1 FROM tb_stockopname_dcompany WHERE NoSO = ? AND IdCompany = ?) AS isValidCompany,
@@ -109,19 +94,26 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
         EXISTS (SELECT 1 FROM tb_stockopname_dlocation WHERE NoSO = ? AND IdLocation = ?) AS isValidLocation
     `;
     const [validationResult] = await pool.query(validationQuery, [
-      noso, companyCode,
-      noso, categoryCode,
-      noso, locationCode
+      noso,
+      companyCode,
+      noso,
+      categoryCode,
+      noso,
+      locationCode,
     ]);
     const validation = validationResult[0];
 
-    if (!validation.isValidCompany || !validation.isValidCategory || !validation.isValidLocation) {
+    if (
+      !validation.isValidCompany ||
+      !validation.isValidCategory ||
+      !validation.isValidLocation
+    ) {
       responsePayload.status = "FAILED";
       responsePayload.message = "AssetCode tidak valid!";
       return res.status(400).json(responsePayload);
     }
 
-    // Cek duplikat, jika duplikat kirim status DUPLICATE dengan pesan
+    // Cek duplikat
     const [duplicateResult] = await pool.query(
       `SELECT COUNT(*) AS count FROM tb_stockopname_d_hasil WHERE NoSO = ? AND AssetCode = ?`,
       [noso, AssetCode]
@@ -132,92 +124,74 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
       return res.status(409).json(responsePayload);
     }
 
-    //CHECK APAKAH ISBOM
-    const [soHeaderResult] = await pool.query(
-      `SELECT IsBOM FROM tb_stockopname_h WHERE NoSO = ? LIMIT 1`, [noso]
+    // Cek asset master
+    const [assetResult] = await pool.query(
+      `SELECT created_at, AssetName FROM asset WHERE AssetCode = ?`,
+      [AssetCode]
     );
-    
-    const isBOM = soHeaderResult[0]?.IsBOM === 1;
 
-    // Cek parts jika kategori IV
-    if (isBOM) {
-      const [partsData] = await pool.query(
-        `SELECT id, level, part FROM tb_parts_bom WHERE AssetCode = ?`, [AssetCode]
-      );
-      if (partsData.length > 0) {
-        responsePayload.status = "PENDING";
-        responsePayload.data.requiresChecklist = true;
-        responsePayload.data.parts = partsData.map(p => ({
-          id: p.id,
-          level: p.level,
-          part: p.part
-        }));
-        responsePayload.message = "Cek Kelengkapan BOM";
-        return res.status(200).json(responsePayload);
-      }
+    if (assetResult.length === 0) {
+      responsePayload.status = "FAILED";
+      responsePayload.message = "AssetCode tidak ditemukan di master data!";
+      return res.status(404).json(responsePayload);
     }
 
-        // Ambil created_at dari asset
-        const [assetResult] = await pool.query(
-          `SELECT created_at, AssetName FROM asset WHERE AssetCode = ?`, [AssetCode]
-        );
-    
-        if (assetResult.length === 0) {
-          responsePayload.status = "FAILED";
-          responsePayload.message = "AssetCode tidak ditemukan di master data!";
-          return res.status(404).json(responsePayload);
-        }
-    
-        const createdAt = new Date(assetResult[0].created_at);
-        responsePayload.data.assetName = assetResult[0].AssetName;
-        responsePayload.data.assetCode = AssetCode;
-    
-        // Ambil tanggal SO dari header
-        const [soResult] = await pool.query(
-          `SELECT Tanggal FROM tb_stockopname_h WHERE NoSO = ?`, [noso]
-        );
-    
-        if (soResult.length === 0) {
-          responsePayload.status = "FAILED";
-          responsePayload.message = "NoSO tidak ditemukan!";
-          return res.status(404).json(responsePayload);
-        }
-    
-        const soDate = new Date(soResult[0].Tanggal);
-    
-        if (createdAt >= soDate) {
-          responsePayload.status = "FAILED";
-          responsePayload.message = `Aset ini melewati batas tanggal stock opname!`;
-          return res.status(400).json(responsePayload);
-        }    
+    const createdAt = new Date(assetResult[0].created_at);
+    responsePayload.data.assetName = assetResult[0].AssetName;
+    responsePayload.data.assetCode = AssetCode;
 
+    // Ambil tanggal SO
+    const [soResult] = await pool.query(
+      `SELECT Tanggal FROM tb_stockopname_h WHERE NoSO = ?`,
+      [noso]
+    );
+    if (soResult.length === 0) {
+      responsePayload.status = "FAILED";
+      responsePayload.message = "NoSO tidak ditemukan!";
+      return res.status(404).json(responsePayload);
+    }
+
+    const soDate = new Date(soResult[0].Tanggal);
+
+    if (createdAt >= soDate) {
+      responsePayload.status = "FAILED";
+      responsePayload.message = `Aset ini melewati batas tanggal stock opname!`;
+      return res.status(400).json(responsePayload);
+    }
 
     if (!responsePayload.message) {
       responsePayload.message = "Validasi berhasil. Asset siap difinalisasi.";
     }
 
-    return res.status(201).json(responsePayload);
-
+    return res.status(200).json(responsePayload);
   } catch (error) {
     console.error("❌ Error:", error);
-    return res.status(500).json({ status: "ERROR", message: "Internal Server Error", error: error.message });
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Internal Server Error",
+      error: error.message,
+    });
   }
 });
+
 
 
 router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
   try {
     const pool = await connectDb();
     const { noso } = req.params;
-    const { AssetCode, AssetName, BOMList } = req.body;
+    const { AssetCode, AssetName } = req.body; // ❌ hapus BOMList dari sini
     const Username = req.user?.username || null;
     const idUser = req.user?.id_user || null;
 
     if (!AssetCode || !AssetName) {
-      return res.status(400).json({ message: "AssetCode dan AssetName wajib diisi" });
+      return res.status(400).json({
+        status: "FAILED",
+        message: "AssetCode dan AssetName wajib diisi"
+      });
     }
 
-    // Cek dan update master data seperti sebelumnya
+    // 🔹 Cek & update master data
     const checkMasterDataSql = `
       SELECT NoSO, AssetCode, HasNotBeenPrinted, Image, id_status, id_user 
       FROM tb_stockopname_d 
@@ -228,8 +202,9 @@ router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
     if (masterDataResult.length > 0) {
       const masterData = masterDataResult[0];
 
+      // 🔹 Hapus file gambar jika ada
       if (masterData.Image) {
-        const imagePath = path.join(__dirname, '..', '..', 'storage', 'uploads', masterData.Image);
+        const imagePath = path.join(__dirname, "..", "..", "storage", "uploads", masterData.Image);
         try {
           if (fs.existsSync(imagePath)) {
             fs.unlinkSync(imagePath);
@@ -242,6 +217,7 @@ router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
         }
       }
 
+      // 🔹 Update master data
       const updateMasterDataSql = `
         UPDATE tb_stockopname_d 
         SET 
@@ -255,49 +231,45 @@ router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
       console.log(`✅ Data master untuk AssetCode ${AssetCode} telah diupdate`);
     }
 
-    // Insert hasil scan ke tb_stockopname_d_hasil
+    // 🔹 Insert hasil scan
     const insertSql = `
       INSERT INTO tb_stockopname_d_hasil (NoSO, AssetCode, id_user, DateTimeScan) 
       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
     `;
     await pool.query(insertSql, [noso, AssetCode, idUser]);
 
-    // Jika BOMList ada dan tidak kosong, insert ke tb_stockopname_hasil_bom
-    if (Array.isArray(BOMList) && BOMList.length > 0) {
-      // Bisa insert multiple sekaligus dengan batch insert
-      const bomValues = BOMList.map(bom => [noso, AssetCode, bom.IdBOM, bom.IsExist ? 1 : 0]);
+    // 🔹 Kirim response sukses
+    res.status(201).json({
+      status: "OK",
+      message: `Asset ${AssetCode} berhasil ditambahkan!`,
+      data: {
+        assetCode: AssetCode,
+        assetName: AssetName,
+        username: Username
+      }
+    });
 
-      // Contoh query batch insert
-      const insertBomSql = `
-        INSERT INTO tb_stockopname_hasil_bom (NoSO, AssetCode, IdBOM, IsExist)
-        VALUES ?
-      `;
-      await pool.query(insertBomSql, [bomValues]);
-      console.log(`✅ Data BOM untuk AssetCode ${AssetCode} berhasil disimpan`);
-    } else {
-      console.log(`ℹ️ Tidak ada data BOM untuk disimpan`);
-    }
-
-    // Kirim response sukses
-    res.status(201).json({ message: `Asset ${AssetCode} berhasil ditambahkan!` });
-
-    // Broadcast ke client
+    // 🔹 Broadcast ke client lain
     broadcast({
-      type: 'NEW_ASSET',
+      type: "NEW_ASSET",
       data: {
         NoSO: noso,
         AssetCode,
         AssetName,
         Username,
         DateTimeScan: new Date().toISOString(),
-      }
+      },
     });
-
   } catch (error) {
     console.error("❌ Error saat submit asset:", error);
-    res.status(500).json({ status: "ERROR", message: "Internal Server Error", error: error.message });
+    res.status(500).json({
+      status: "ERROR",
+      message: "Internal Server Error",
+      error: error.message,
+    });
   }
 });
+
 
 
 //Fungsi untuk fetch AssetCode dan AssetName berdasarkan QR Code

@@ -13,44 +13,34 @@ function hashPassword(password) {
 router.use(express.json());
 
 // POST /login route
+// routes/auth.js
 router.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    await connectDb();  
-
-    // Hash the password with MD5 to compare with the database
+    // Hash password
     const hashedPassword = hashPassword(password);
-    console.log('Hashed password:', hashedPassword);
 
-    // Query the database for the user with the hashed password
+    // Query pakai pool
     const [rows] = await pool.query(
-      'SELECT id_user, username, password FROM tb_user WHERE username = ? AND password = ?',
+      'SELECT id_user, username FROM tb_user WHERE username = ? AND password = ?',
       [username, hashedPassword]
     );
 
     if (rows.length > 0) {
       const user = rows[0];
-      console.log('User found:', user);
 
-            // Membuat JWT token
-            const payload = { id_user: user.id_user, username: user.username };  // Payload hanya berisi username
-            const secretKey = process.env.SECRET_KEY;  
-      
-            // Membuat token yang berlaku selama 1 jam
-            const token = jwt.sign(payload, secretKey, { expiresIn: '12h' });
+      // Buat token
+      const payload = { id_user: user.id_user, username: user.username };
+      const token = jwt.sign(payload, process.env.SECRET_KEY, { expiresIn: '12h' });
 
-      res.status(200).json({
+      res.json({
         success: true,
         message: 'Login berhasil',
-        token: token,
-        user: {
-          id_user: user.id_user,
-          username: user.username
-        }
+        token,
+        user
       });
     } else {
-      console.log('Invalid credentials');
       res.status(400).json({ success: false, message: 'Username atau password salah' });
     }
   } catch (err) {
