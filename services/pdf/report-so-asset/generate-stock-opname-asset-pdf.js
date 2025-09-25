@@ -6,37 +6,51 @@ const { renderCommentBox } = require('./sections/comment-box');
 const { renderJadwalRealisasiTable } = require('./sections/jadwal-realisasi-section');
 const { renderTandaTanganBox } = require('./sections/tanda-tangan-section');
 
-
-
-
 async function generateStockOpnameAssetPdf(res, metadata) {
   const { noSO, tanggal = '-', perusahaan = '-', lokasi = '-', lockedDate = '-' } = metadata;
+  const MINIMUM_BOTTOM_MARGIN = 80;
 
   const doc = new PDFDocument({ margin: 40, size: 'A4' });
   doc.pipe(res);
 
+  // 🔹 Helper
+  function ensureSpace(neededHeight) {
+    const availableSpace =
+      doc.page.height - doc.y - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN;
+
+    if (availableSpace < neededHeight) {
+      doc.addPage();
+    } else {
+      doc.moveDown(1.5);
+    }
+  }
+
+  // 🔹 Judul utama
   doc.fontSize(16).font('Helvetica-Bold').text('BERITA ACARA STOCK OPNAME', { align: 'center' });
   doc.moveDown(1.5);
 
+  // 🔹 Header info
   renderHeaderInfo(doc, { tanggal, perusahaan });
 
+  // 🔹 Tabel hasil opname by lokasi
+  ensureSpace(200);
   await printAllGroupedByLocation(doc, noSO);
 
-  await printStockOpnameSummary(doc, noSO)
+  // 🔹 Rangkuman opname
+  ensureSpace(150);
+  await printStockOpnameSummary(doc, noSO);
 
-  doc.moveDown(1.5);
-
+  // 🔹 Comment box
+  ensureSpace(100);
   renderCommentBox(doc);
 
-  doc.moveDown(1.5);
+  // 🔹 Jadwal realisasi
+  ensureSpace(160);
+  renderJadwalRealisasiTable(doc, tanggal, lockedDate);
 
-  renderJadwalRealisasiTable(doc, tanggal, lockedDate); 
-
-  doc.moveDown(2);
-
+  // 🔹 Tanda tangan (wajib full section)
+  ensureSpace(120);
   renderTandaTanganBox(doc);
-
-
 
   doc.end();
 }

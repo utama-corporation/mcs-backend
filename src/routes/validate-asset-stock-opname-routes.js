@@ -180,7 +180,7 @@ router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
   try {
     const pool = await connectDb();
     const { noso } = req.params;
-    const { AssetCode, AssetName } = req.body; // ❌ hapus BOMList dari sini
+    const { AssetCode, AssetName } = req.body; 
     const Username = req.user?.username || null;
     const idUser = req.user?.id_user || null;
 

@@ -133,9 +133,6 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
           queryParams
         );
         
-  
-// 6. Insert AssetCode ke tabel `tb_stockopname_bom`
-// 6. Insert AssetCode ke tabel yang sesuai berdasarkan IsBOM
 // 6. Insert AssetCode ke tabel yang sesuai berdasarkan IsBOM
 if (assets.length > 0) {
   console.log("✅ Nilai IsBOM:", IsBOM);
