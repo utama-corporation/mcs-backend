@@ -98,7 +98,7 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
         await insertDetails('tb_stockopname_dlocation', 'IdLocation', locationIds);
 
         // 5. Ambil semua AssetCode dari tabel `asset`
-        let filterConditions = "WHERE created_at < ? AND status = 'active'";
+        let filterConditions = "WHERE created_at < ? AND active = 'active'";
         const queryParams = [Tanggal];
   
         // Filter berdasarkan Company
