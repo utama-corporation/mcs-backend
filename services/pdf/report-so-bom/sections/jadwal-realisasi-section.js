@@ -48,7 +48,7 @@ async function renderJadwalRealisasiTable(doc, noSO) {
   }
 
   // Hitung apakah perlu pindah halaman
-  const estimatedTitleHeight = doc.heightOfString('IV. Jadwal VS Realisasi SO', {
+  const estimatedTitleHeight = doc.heightOfString('V. Jadwal VS Realisasi SO', {
     width: tableWidth,
     align: 'left'
   });

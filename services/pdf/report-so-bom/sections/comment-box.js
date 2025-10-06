@@ -18,7 +18,7 @@ function renderCommentBox(doc) {
 
   const y = doc.y;
 
-  doc.font('Helvetica-Bold').fontSize(fontSize).text('III. Tanggapan PIC Terkait Selisih', startX, y);
+  doc.font('Helvetica-Bold').fontSize(fontSize).text('IV. Tanggapan PIC Terkait Selisih', startX, y);
   doc.rect(startX, y + titleHeight, boxWidth, boxHeight).stroke();
 
   doc.y = y + titleHeight + boxHeight + spacing;

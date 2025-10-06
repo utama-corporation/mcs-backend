@@ -5,6 +5,8 @@ const { renderJadwalRealisasiTable } = require('./sections/jadwal-realisasi-sect
 const { renderTandaTanganBox } = require('./sections/tanda-tangan-section');
 const { renderHeaderInfo } = require('./sections/header-info-section');
 const { renderNonPartTable } = require('./sections/non-part-stock-opname-table');
+const { renderRangkumanSelisihStockOpname } = require('./sections/rangkuman-selisih-stock-opname');
+
 
 async function generateStockOpnameBomPdf(res, metadata) {
   const { noSO } = metadata;
@@ -27,6 +29,16 @@ async function generateStockOpnameBomPdf(res, metadata) {
   } else {
     doc.moveDown(1);
   }
+
+  await renderRangkumanSelisihStockOpname(doc, noSO);
+
+    // Cek spacing sebelum non-part table
+    if (doc.y > doc.page.height - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN - 80) {
+      doc.addPage();
+    } else {
+      doc.moveDown(1.5);
+    }
+  
 
   // Render tabel hasil stock opname
   await renderHasilStockOpnameTable(doc, noSO);
