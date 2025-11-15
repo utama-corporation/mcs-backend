@@ -48,7 +48,7 @@ async function renderJadwalRealisasiTable(doc, noSO) {
   }
 
   // Hitung apakah perlu pindah halaman
-  const estimatedTitleHeight = doc.heightOfString('V. Jadwal VS Realisasi SO', {
+  const estimatedTitleHeight = doc.heightOfString('VI. Jadwal VS Realisasi SO', {
     width: tableWidth,
     align: 'left'
   });
@@ -63,7 +63,7 @@ async function renderJadwalRealisasiTable(doc, noSO) {
   let y = doc.y + 20;
 
   // Judul
-  doc.font('Helvetica-Bold').fontSize(12).text('IV. Jadwal VS Realisasi SO');
+  doc.font('Helvetica-Bold').fontSize(12).text('VI. Jadwal VS Realisasi SO');
   y = doc.y + 10;
 
   // Header kolom

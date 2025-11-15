@@ -6,6 +6,26 @@ const { renderTandaTanganBox } = require('./sections/tanda-tangan-section');
 const { renderHeaderInfo } = require('./sections/header-info-section');
 const { renderNonPartTable } = require('./sections/non-part-stock-opname-table');
 const { renderRangkumanSelisihStockOpname } = require('./sections/rangkuman-selisih-stock-opname');
+const { renderRangkumanSO6BulanTotals } = require('./sections/rangkuman-so-6bulan');
+
+
+
+function drawSeparator(doc, { dashed = false, color = '#999', thick = 0.5, gap = 8 } = {}) {
+  const { left, right } = doc.page.margins;
+  const x1 = left;
+  const x2 = doc.page.width - right;
+  const y  = doc.y + gap;     // beri jarak kecil dari konten sebelumnya
+
+  doc.save();
+  if (dashed) doc.dash(3, { space: 3 });
+  doc.lineWidth(thick).strokeColor(color)
+     .moveTo(x1, y).lineTo(x2, y).stroke();
+  doc.undash(); // reset dash
+  doc.restore();
+
+  doc.y = y;       // set Y di posisi garis
+  doc.moveDown(0.8); // beri jarak setelah garis
+}
 
 
 async function generateStockOpnameBomPdf(res, metadata) {
@@ -36,9 +56,23 @@ async function generateStockOpnameBomPdf(res, metadata) {
     if (doc.y > doc.page.height - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN - 80) {
       doc.addPage();
     } else {
-      doc.moveDown(1.5);
+      doc.moveDown(1);
     }
-  
+
+    drawSeparator(doc, { color: 'black', thick: 5 });
+
+    await renderRangkumanSO6BulanTotals(doc, noSO);
+
+    drawSeparator(doc, { color: 'black', thick: 5 });
+
+
+      // Cek spacing sebelum non-part table
+      if (doc.y > doc.page.height - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN - 80) {
+        doc.addPage();
+      } else {
+        doc.moveDown(1.5);
+      }
+
 
   // Render tabel hasil stock opname
   await renderHasilStockOpnameTable(doc, noSO);

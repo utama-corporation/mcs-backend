@@ -69,7 +69,7 @@ async function renderHasilStockOpnameTable(doc, noSO) {
   const leftMargin = doc.page.margins.left;
   doc.fontSize(13)
     .font('Helvetica-Bold')
-    .text('II. Hasil Stock Opname', leftMargin, doc.y, { align: 'left' });
+    .text('III. Hasil Stock Opname', leftMargin, doc.y, { align: 'left' });
 
   doc.moveDown(0.8);
 

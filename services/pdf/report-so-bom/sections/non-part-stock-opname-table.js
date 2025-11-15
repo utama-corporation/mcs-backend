@@ -60,7 +60,7 @@ async function renderNonPartTable(doc, noSO) {
     if (!combinedRows.length) {
       doc.fontSize(13)
          .font('Helvetica-Bold')
-         .text('III. Alat Kerja Diluar Daftar SO ', startX, y, { align: 'left' });
+         .text('IV. Alat Kerja Diluar Daftar SO ', startX, y, { align: 'left' });
       y += 20;
       doc.fontSize(10)
          .font('Helvetica-Oblique')
