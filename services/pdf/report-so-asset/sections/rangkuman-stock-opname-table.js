@@ -366,7 +366,7 @@ async function printStockOpnameSummary(doc, noSO) {
   
       // Print the title
       doc.font('Helvetica-Bold').fontSize(14)
-        .text('II. Ringkasan Hasil SO', { align: 'left' });
+        .text('III. Ringkasan Hasil SO', { align: 'left' });
   
       doc.moveDown(0.5);
   

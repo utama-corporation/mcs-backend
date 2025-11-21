@@ -65,14 +65,12 @@ async function generateStockOpnameBomPdf(res, metadata) {
 
     drawSeparator(doc, { color: 'black', thick: 5 });
 
-
       // Cek spacing sebelum non-part table
       if (doc.y > doc.page.height - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN - 80) {
         doc.addPage();
       } else {
         doc.moveDown(1.5);
       }
-
 
   // Render tabel hasil stock opname
   await renderHasilStockOpnameTable(doc, noSO);

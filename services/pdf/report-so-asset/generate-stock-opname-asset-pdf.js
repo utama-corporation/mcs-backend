@@ -5,6 +5,8 @@ const { printStockOpnameSummary } = require('./sections/rangkuman-stock-opname-t
 const { renderCommentBox } = require('./sections/comment-box');
 const { renderJadwalRealisasiTable } = require('./sections/jadwal-realisasi-section');
 const { renderTandaTanganBox } = require('./sections/tanda-tangan-section');
+const { printStockOpnameHistory } = require('./sections/rangkuman-so-6bulan');
+
 
 async function generateStockOpnameAssetPdf(res, metadata) {
   const { noSO, tanggal = '-', perusahaan = '-', lokasi = '-', lockedDate = '-' } = metadata;
@@ -36,9 +38,14 @@ async function generateStockOpnameAssetPdf(res, metadata) {
   ensureSpace(200);
   await printAllGroupedByLocation(doc, noSO);
 
+  
+  ensureSpace(200);
+  await printStockOpnameHistory(doc, noSO);
+
   // 🔹 Rangkuman opname
   ensureSpace(150);
   await printStockOpnameSummary(doc, noSO);
+
 
   // 🔹 Comment box
   ensureSpace(100);
