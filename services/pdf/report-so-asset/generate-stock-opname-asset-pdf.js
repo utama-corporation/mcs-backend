@@ -8,6 +8,24 @@ const { renderTandaTanganBox } = require('./sections/tanda-tangan-section');
 const { printStockOpnameHistory } = require('./sections/rangkuman-so-6bulan');
 
 
+function drawSeparator(doc, { dashed = false, color = '#999', thick = 0.5, gap = 8 } = {}) {
+  const { left, right } = doc.page.margins;
+  const x1 = left;
+  const x2 = doc.page.width - right;
+  const y  = doc.y + gap;     // beri jarak kecil dari konten sebelumnya
+
+  doc.save();
+  if (dashed) doc.dash(3, { space: 3 });
+  doc.lineWidth(thick).strokeColor(color)
+     .moveTo(x1, y).lineTo(x2, y).stroke();
+  doc.undash(); // reset dash
+  doc.restore();
+
+  doc.y = y;       // set Y di posisi garis
+  doc.moveDown(0.8); // beri jarak setelah garis
+}
+
+
 async function generateStockOpnameAssetPdf(res, metadata) {
   const { noSO, tanggal = '-', perusahaan = '-', lokasi = '-', lockedDate = '-' } = metadata;
   const MINIMUM_BOTTOM_MARGIN = 80;
@@ -35,12 +53,14 @@ async function generateStockOpnameAssetPdf(res, metadata) {
   renderHeaderInfo(doc, { tanggal, perusahaan });
 
   // 🔹 Tabel hasil opname by lokasi
-  ensureSpace(200);
   await printAllGroupedByLocation(doc, noSO);
 
-  
+  // 🔹 Tabel riwayat 6 bulan terakhir hasil SO
   ensureSpace(200);
+  drawSeparator(doc, { color: 'black', thick: 5 });
   await printStockOpnameHistory(doc, noSO);
+  drawSeparator(doc, { color: 'black', thick: 5 });
+
 
   // 🔹 Rangkuman opname
   ensureSpace(150);

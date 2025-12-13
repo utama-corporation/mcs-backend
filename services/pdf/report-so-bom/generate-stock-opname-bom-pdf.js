@@ -56,7 +56,7 @@ async function generateStockOpnameBomPdf(res, metadata) {
     if (doc.y > doc.page.height - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN - 80) {
       doc.addPage();
     } else {
-      doc.moveDown(1);
+      doc.moveDown(0.1);
     }
 
     drawSeparator(doc, { color: 'black', thick: 5 });

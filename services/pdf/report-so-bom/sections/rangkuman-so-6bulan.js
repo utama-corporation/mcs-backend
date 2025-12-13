@@ -2,6 +2,16 @@
 const { pool } = require('../../../../db');
 
 // ==== utils ====
+
+function formatSelisih(value) {
+  const number = parseFloat(value ?? 0);
+  if (!Number.isFinite(number) || number === 0) return '0';
+
+  const absStr = formatQty(Math.abs(number)); // pakai formatQty biar 1/1.00 konsisten
+
+  return number > 0 ? `+${absStr}` : `-${absStr}`;
+}
+
 function getTextHeight(doc, text, options) {
   return doc.heightOfString(String(text ?? '-'), options);
 }
@@ -144,7 +154,7 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
       Bulan: monthNumber(tanggalAcuan),
       QtySistem: sistem,
       QtyFisik:  fisik,
-      Selisih:   sistem - fisik,
+      Selisih:   fisik - sistem,
     });
   }
   for (const m of matches) {
@@ -203,7 +213,7 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
       r.Bulan,
       formatQty(r.QtySistem),
       formatQty(r.QtyFisik),
-      formatQty(r.Selisih),
+      formatSelisih(r.Selisih),
     ];
 
     // tinggi baris

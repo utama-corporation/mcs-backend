@@ -44,8 +44,7 @@ async function renderRangkumanSelisihStockOpname(doc, noSO) {
 
   // ✅ Kalau tidak ada data selisih: tampilkan info
   if (!rows.length) {
-    doc.fontSize(11).font('Helvetica')
-      .text('Tidak ada selisih stock opname.', leftMargin, doc.y, { align: 'left' });
+    doc.font('Helvetica-Oblique').fontSize(12).text('Tidak ada selisih');
     doc.moveDown(1.5);
     return; // keluar supaya tidak render tabel
   }

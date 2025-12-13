@@ -166,17 +166,44 @@ async function fetchStockOpnameSummary(noSO) {
   }
 }
 
-function drawSummaryTableHeader(doc, startX, y, columns, headerHeight=25) {
+function drawSummaryTableHeader(doc, startX, y, columns, headerHeight = 25) {
   doc.font('Helvetica-Bold').fontSize(9);
-  
+
+  const verticalPadding = 3; // minimal jarak dari garis atas
+
   let currentX = startX;
-  columns.forEach(col => {
+  columns.forEach((col) => {
+    // kotak header
     doc.rect(currentX, y, col.width, headerHeight).stroke();
-    doc.text(col.text, currentX+3, y+3, {width: col.width - 6, align: 'center', lineGap: 1});
+
+    // tinggi teks di dalam lebar kolom
+    const textHeight = doc.heightOfString(col.text, {
+      width: col.width - 6,
+      align: 'center',
+      lineGap: 1,
+    });
+
+    // Y teks: di tengah, tapi minimal ada verticalPadding dari atas
+    const textY =
+      y +
+      Math.max(
+        verticalPadding,
+        (headerHeight - textHeight) / 2
+      );
+
+    // teks center horizontal
+    doc.text(col.text, currentX + 3, textY, {
+      width: col.width - 6,
+      align: 'center',
+      lineGap: 1,
+    });
+
     currentX += col.width;
   });
+
   return y + headerHeight;
 }
+
 
 function checkPageSpace(doc, requiredHeight) {
   const currentY = doc.y;
