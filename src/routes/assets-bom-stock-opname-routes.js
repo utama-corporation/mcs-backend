@@ -212,7 +212,7 @@ router.get("/part-bom", async (req, res) => {
         qty_on_hand,
         uom
       FROM tb_parts_bom
-      WHERE AssetCode = ?
+      WHERE AssetCode = ? AND is_active = 1
       ORDER BY level, part ASC
     `,
       [assetCode],
