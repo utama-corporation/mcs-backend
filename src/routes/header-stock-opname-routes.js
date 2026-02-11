@@ -24,6 +24,8 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
 
     // Data dari body request (tanpa NoSO)
     const { Tanggal, IdCompanies, IdCategories, IdLocations, IsBOM } = req.body;
+    const isBOMEnabled =
+      IsBOM === true || IsBOM === 1 || IsBOM === "1" || IsBOM === "true";
 
     // Validasi input
     if (
@@ -66,7 +68,7 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
       // 3. Insert ke tabel header
       await pool.query(
         `INSERT INTO tb_stockopname_h (NoSO, Tanggal, IsBOM) VALUES (?, ?, ?)`,
-        [newNoSO, Tanggal, IsBOM],
+        [newNoSO, Tanggal, isBOMEnabled ? 1 : 0],
       );
 
       // 4. Insert ke tabel-tabel detail
@@ -172,9 +174,10 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
 
       // 6. Insert AssetCode ke tabel yang sesuai berdasarkan IsBOM
       if (assets.length > 0) {
-        console.log("✅ Nilai IsBOM:", IsBOM);
+        console.log("✅ Nilai IsBOM (raw):", IsBOM);
+        console.log("✅ Nilai IsBOM (normalized):", isBOMEnabled);
 
-        if (IsBOM) {
+        if (isBOMEnabled) {
           // IsBOM = true → Insert ke tb_stockopname_bom
           console.log("🔍 IsBOM aktif, ambil semua parts dari tb_parts_bom...");
 
@@ -282,7 +285,7 @@ router.post("/no-stock-opname/create", verifyToken, async (req, res) => {
           IdCompanies: IdCompanies,
           IdCategories: IdCategories,
           IdLocations: IdLocations,
-          IsBOM: IsBOM,
+          IsBOM: isBOMEnabled,
         },
       });
     } catch (error) {
