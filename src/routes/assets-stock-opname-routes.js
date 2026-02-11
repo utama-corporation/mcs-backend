@@ -1,20 +1,18 @@
-const express = require('express');
-const verifyToken = require('../middleware/verifyToken'); // Middleware to verify JWT token
-const moment = require('moment');
-const { pool, connectDb } = require('../../db');  // Import MySQL connection pool
+const express = require("express");
+const verifyToken = require("../middleware/verifyToken"); // Middleware to verify JWT token
+const moment = require("moment");
+const { pool, connectDb } = require("../../db"); // Import MySQL connection pool
 const router = express.Router();
 const axios = require("axios");
 const cheerio = require("cheerio");
-const { broadcast } = require('../../websocket'); // Import dari root
-const path = require('path'); // Pastikan path diimpor
-const fs = require('fs');
-require('moment/locale/id');
-moment.locale('id'); // Set ke bahasa Indonesia
-
-
+const { broadcast } = require("../../websocket"); // Import dari root
+const path = require("path"); // Pastikan path diimpor
+const fs = require("fs");
+require("moment/locale/id");
+moment.locale("id"); // Set ke bahasa Indonesia
 
 // Fetch data asset before
-router.get('/no-stock-opname-current/:noso', verifyToken, async (req, res) => {
+router.get("/no-stock-opname-current/:noso", verifyToken, async (req, res) => {
   try {
     await connectDb();
 
@@ -26,29 +24,35 @@ router.get('/no-stock-opname-current/:noso', verifyToken, async (req, res) => {
     const locationQuery = req.query.location;
 
     // Base condition - NoSO wajib dan belum discan
-    let filterConditions = 'd.NoSO = ? AND h.AssetCode IS NULL';
+    let filterConditions = "d.NoSO = ? AND h.AssetCode IS NULL";
     const queryParams = [noso];
 
     // ✅ Filter Company (based on asset.CompanyName)
     if (companyQuery) {
-      const companyList = companyQuery.split(',').map(c => c.trim());
-      const companyConditions = companyList.map(() => `a.CompanyName = ?`).join(' OR ');
+      const companyList = companyQuery.split(",").map((c) => c.trim());
+      const companyConditions = companyList
+        .map(() => `a.CompanyName = ?`)
+        .join(" OR ");
       filterConditions += ` AND (${companyConditions})`;
       queryParams.push(...companyList);
     }
 
     // ✅ Filter Category (based on asset.CategoryAsset)
     if (categoryQuery) {
-      const categoryList = categoryQuery.split(',').map(c => c.trim());
-      const categoryConditions = categoryList.map(() => `a.CategoryAsset = ?`).join(' OR ');
+      const categoryList = categoryQuery.split(",").map((c) => c.trim());
+      const categoryConditions = categoryList
+        .map(() => `a.CategoryAsset = ?`)
+        .join(" OR ");
       filterConditions += ` AND (${categoryConditions})`;
       queryParams.push(...categoryList);
     }
 
     // ✅ Filter Location (based on asset.LocationAsset)
     if (locationQuery) {
-      const locationList = locationQuery.split(',').map(l => l.trim());
-      const locationConditions = locationList.map(() => `a.LocationAsset = ?`).join(' OR ');
+      const locationList = locationQuery.split(",").map((l) => l.trim());
+      const locationConditions = locationList
+        .map(() => `a.LocationAsset = ?`)
+        .join(" OR ");
       filterConditions += ` AND (${locationConditions})`;
       queryParams.push(...locationList);
     }
@@ -106,8 +110,8 @@ router.get('/no-stock-opname-current/:noso', verifyToken, async (req, res) => {
     const total = countResult[0]?.total || 0;
 
     if (rows.length === 0) {
-      return res.status(404).json({ 
-        message: `Tidak ada data asset yang belum discan untuk NoSO: ${noso}` 
+      return res.status(404).json({
+        message: `Tidak ada data asset yang belum discan untuk NoSO: ${noso}`,
       });
     }
 
@@ -115,61 +119,64 @@ router.get('/no-stock-opname-current/:noso', verifyToken, async (req, res) => {
       data: rows,
       total,
       nextOffset: offset + limit,
-      hasMore: offset + limit < total
+      hasMore: offset + limit < total,
     });
-
   } catch (error) {
-    console.error('Error:', error.message);
-    res.status(500).json({ 
-      message: 'Internal Server Error',
-      error: error.message 
+    console.error("Error:", error.message);
+    res.status(500).json({
+      message: "Internal Server Error",
+      error: error.message,
     });
   }
 });
 
+// Route to get Asset data based on NoSO
+router.get("/no-stock-opname/:noso", verifyToken, async (req, res) => {
+  try {
+    await connectDb();
 
+    const { noso } = req.params;
+    const limit = 50;
+    const offset = parseInt(req.query.offset) || 0;
+    const companyQuery = req.query.company;
+    const categoryQuery = req.query.category;
+    const locationQuery = req.query.location;
 
-  // Route to get Asset data based on NoSO
-  router.get('/no-stock-opname/:noso', verifyToken, async (req, res) => {
-    try {
-      await connectDb();
-  
-      const { noso } = req.params;
-      const limit = 50;
-      const offset = parseInt(req.query.offset) || 0;
-      const companyQuery = req.query.company;
-      const categoryQuery = req.query.category;
-      const locationQuery = req.query.location;
-  
-      let filterConditions = 'h.NoSO = ?';
-      const queryParams = [noso];
-  
-      // ✅ Filter berdasarkan Company (langsung dari a.CompanyName)
-      if (companyQuery) {
-        const companyList = companyQuery.split(',').map(c => c.trim());
-        const companyConditions = companyList.map(() => `a.CompanyName = ?`).join(' OR ');
-        filterConditions += ` AND (${companyConditions})`;
-        queryParams.push(...companyList);
-      }
-  
-      // ✅ Filter berdasarkan Category (langsung dari a.CategoryAsset)
-      if (categoryQuery) {
-        const categoryList = categoryQuery.split(',').map(c => c.trim());
-        const categoryConditions = categoryList.map(() => `a.CategoryAsset = ?`).join(' OR ');
-        filterConditions += ` AND (${categoryConditions})`;
-        queryParams.push(...categoryList);
-      }
-  
-      // ✅ Filter berdasarkan Location (langsung dari a.LocationAsset)
-      if (locationQuery) {
-        const locationList = locationQuery.split(',').map(l => l.trim());
-        const locationConditions = locationList.map(() => `a.LocationAsset = ?`).join(' OR ');
-        filterConditions += ` AND (${locationConditions})`;
-        queryParams.push(...locationList);
-      }
-  
-      // Query data hasil scan
-      const dataQuery = `
+    let filterConditions = "h.NoSO = ?";
+    const queryParams = [noso];
+
+    // ✅ Filter berdasarkan Company (langsung dari a.CompanyName)
+    if (companyQuery) {
+      const companyList = companyQuery.split(",").map((c) => c.trim());
+      const companyConditions = companyList
+        .map(() => `a.CompanyName = ?`)
+        .join(" OR ");
+      filterConditions += ` AND (${companyConditions})`;
+      queryParams.push(...companyList);
+    }
+
+    // ✅ Filter berdasarkan Category (langsung dari a.CategoryAsset)
+    if (categoryQuery) {
+      const categoryList = categoryQuery.split(",").map((c) => c.trim());
+      const categoryConditions = categoryList
+        .map(() => `a.CategoryAsset = ?`)
+        .join(" OR ");
+      filterConditions += ` AND (${categoryConditions})`;
+      queryParams.push(...categoryList);
+    }
+
+    // ✅ Filter berdasarkan Location (langsung dari a.LocationAsset)
+    if (locationQuery) {
+      const locationList = locationQuery.split(",").map((l) => l.trim());
+      const locationConditions = locationList
+        .map(() => `a.LocationAsset = ?`)
+        .join(" OR ");
+      filterConditions += ` AND (${locationConditions})`;
+      queryParams.push(...locationList);
+    }
+
+    // Query data hasil scan
+    const dataQuery = `
         SELECT 
           h.AssetCode, 
           u.Username, 
@@ -184,68 +191,66 @@ router.get('/no-stock-opname-current/:noso', verifyToken, async (req, res) => {
         ORDER BY h.DateTimeScan DESC
         LIMIT ? OFFSET ?
       `;
-      queryParams.push(limit, offset);
-  
-      const [rows] = await pool.query(dataQuery, queryParams);
-  
-      // Query total count
-      const countQuery = `
+    queryParams.push(limit, offset);
+
+    const [rows] = await pool.query(dataQuery, queryParams);
+
+    // Query total count
+    const countQuery = `
         SELECT COUNT(*) as total 
         FROM tb_stockopname_d_hasil h
         LEFT JOIN asset a ON h.AssetCode = a.AssetCode
         WHERE ${filterConditions}
       `;
-      const [countResult] = await pool.query(countQuery, queryParams.slice(0, -2));
-  
-      const total = countResult[0]?.total || 0;
-  
-      if (rows.length === 0) {
-        return res.status(404).json({ message: `Tidak ada data asset untuk NoSO: ${noso}` });
-      }
-  
-      res.json({
-        data: rows,
-        total,
-        nextOffset: offset + limit,
-        hasMore: offset + limit < total
-      });
-  
-    } catch (error) {
-      console.error('Error:', error.message);
-      res.status(500).json({ message: 'Internal Server Error' });
+    const [countResult] = await pool.query(
+      countQuery,
+      queryParams.slice(0, -2),
+    );
+
+    const total = countResult[0]?.total || 0;
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: `Tidak ada data asset untuk NoSO: ${noso}` });
     }
-  });
-  
 
+    res.json({
+      data: rows,
+      total,
+      nextOffset: offset + limit,
+      hasMore: offset + limit < total,
+    });
+  } catch (error) {
+    console.error("Error:", error.message);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
 
-  //UPDATE ASSET DETAIL PADA STOCKOPNAME_D
-router.put('/update-stock-opname', verifyToken, async (req, res) => {
-    try {
-      await connectDb();
-  
-      const {
-        noSO,
-        assetCode,
-        image,
-        idStatus,
-        isUpdateValid
-      } = req.body;
-  
-      const idUser = req.user.id_user;
-  
-      console.log("🟡 ID User dari JWT:", idUser);
-  
-      // Validasi input
-      if (!noSO || !assetCode) {
-        return res.status(400).json({ message: 'NoSO dan AssetCode wajib diisi' });
-      }
-  
-      let query = '';
-      let values = [];
-  
-      if (isUpdateValid) {
-        // Update data seperti biasa
-        query = `
+//UPDATE ASSET DETAIL PADA STOCKOPNAME_D
+router.put("/update-stock-opname", verifyToken, async (req, res) => {
+  try {
+    await connectDb();
+
+    const { noSO, assetCode, image, idStatus, isUpdateValid } = req.body;
+
+    const idUser = req.user.id_user;
+
+    console.log("🟡 ID User dari JWT:", idUser);
+
+    // Validasi input
+    if (!noSO || !assetCode) {
+      return res
+        .status(400)
+        .json({ message: "NoSO dan AssetCode wajib diisi" });
+    }
+
+    let query = "";
+    let values = [];
+
+    if (isUpdateValid) {
+      // Update data seperti biasa
+      query = `
           UPDATE tb_stockopname_d 
           SET 
             HasNotBeenPrinted = 1, 
@@ -254,32 +259,33 @@ router.put('/update-stock-opname', verifyToken, async (req, res) => {
             id_user = ? 
           WHERE NoSO = ? AND AssetCode = ?
         `;
-        values = [
-          image ?? null,
-          idStatus ?? null,
-          idUser,
-          noSO,
-          assetCode
-        ];
-      } else {
-        // Hapus gambar dari file system jika ada
-        const imagePath = path.join(__dirname, '..', '..', 'storage', 'uploads', image);
-      
-        try {
-          // Cek apakah file gambar ada, lalu hapus
-          if (fs.existsSync(imagePath)) {
-            fs.unlinkSync(imagePath);  // Hapus file
-            console.log(`✅ File gambar ${image} berhasil dihapus`);
-          } else {
-            console.log(`⚠️ File gambar ${image} tidak ditemukan`);
-          }
-        } catch (err) {
-          console.error(`❌ Gagal menghapus file gambar: ${err.message}`);
-          // Lanjutkan proses meskipun gagal menghapus file
+      values = [image ?? null, idStatus ?? null, idUser, noSO, assetCode];
+    } else {
+      // Hapus gambar dari file system jika ada
+      const imagePath = path.join(
+        __dirname,
+        "..",
+        "..",
+        "storage",
+        "uploads",
+        image,
+      );
+
+      try {
+        // Cek apakah file gambar ada, lalu hapus
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath); // Hapus file
+          console.log(`✅ File gambar ${image} berhasil dihapus`);
+        } else {
+          console.log(`⚠️ File gambar ${image} tidak ditemukan`);
         }
-      
-        // Reset data
-        query = `
+      } catch (err) {
+        console.error(`❌ Gagal menghapus file gambar: ${err.message}`);
+        // Lanjutkan proses meskipun gagal menghapus file
+      }
+
+      // Reset data
+      query = `
           UPDATE tb_stockopname_d 
           SET 
             HasNotBeenPrinted = 0, 
@@ -288,23 +294,24 @@ router.put('/update-stock-opname', verifyToken, async (req, res) => {
             id_user = NULL 
           WHERE NoSO = ? AND AssetCode = ?
         `;
-        values = [noSO, assetCode];
-      }
-      
-  
-      const [result] = await pool.query(query, values);
-  
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: 'Data tidak ditemukan atau tidak berubah' });
-      }
-  
-      res.json({ message: 'Data berhasil diupdate' });
-  
-    } catch (error) {
-      console.error('Update error:', error.message);
-      res.status(500).json({ message: 'Internal Server Error', error: error.message });
+      values = [noSO, assetCode];
     }
-  });
 
+    const [result] = await pool.query(query, values);
 
-  module.exports = router;
+    if (result.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ message: "Data tidak ditemukan atau tidak berubah" });
+    }
+
+    res.json({ message: "Data berhasil diupdate" });
+  } catch (error) {
+    console.error("Update error:", error.message);
+    res
+      .status(500)
+      .json({ message: "Internal Server Error", error: error.message });
+  }
+});
+
+module.exports = router;

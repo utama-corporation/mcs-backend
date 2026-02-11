@@ -1,74 +1,81 @@
-const express = require('express');
-const verifyToken = require('../middleware/verifyToken'); // Middleware to verify JWT token
-const moment = require('moment');
-const { pool, connectDb } = require('../../db');  // Import MySQL connection pool
+const express = require("express");
+const verifyToken = require("../middleware/verifyToken"); // Middleware to verify JWT token
+const moment = require("moment");
+const { pool, connectDb } = require("../../db"); // Import MySQL connection pool
 const router = express.Router();
 const axios = require("axios");
 const cheerio = require("cheerio");
-const { broadcast } = require('../../websocket'); // Import dari root
-const path = require('path'); // Pastikan path diimpor
-const fs = require('fs');
-require('moment/locale/id');
-moment.locale('id'); // Set ke bahasa Indonesia
-
-
+const { broadcast } = require("../../websocket"); // Import dari root
+const path = require("path"); // Pastikan path diimpor
+const fs = require("fs");
+require("moment/locale/id");
+moment.locale("id"); // Set ke bahasa Indonesia
 
 // Fetch data asset before
-router.get('/no-stock-opname-current-bom/:noso', verifyToken, async (req, res) => {
-  try {
-    await connectDb();
+router.get(
+  "/no-stock-opname-current-bom/:noso",
+  verifyToken,
+  async (req, res) => {
+    try {
+      await connectDb();
 
-    const { noso } = req.params;
-    const limit = 50;
-    const offset = parseInt(req.query.offset) || 0;
-    const companyQuery = req.query.company;
-    const categoryQuery = req.query.category;
-    const locationQuery = req.query.location;
+      const { noso } = req.params;
+      const limit = 50;
+      const offset = parseInt(req.query.offset) || 0;
+      const companyQuery = req.query.company;
+      const categoryQuery = req.query.category;
+      const locationQuery = req.query.location;
 
-    // 1. Ambil assetCode unik dari tb_stockopname_bom berdasarkan NoSO + filter dari tabel asset
-    let filterConditions = 'b.NoSO = ?';
-    const filterParams = [noso];
+      // 1. Ambil assetCode unik dari tb_stockopname_bom berdasarkan NoSO + filter dari tabel asset
+      let filterConditions = "b.NoSO = ?";
+      const filterParams = [noso];
 
-    if (companyQuery) {
-      const companies = companyQuery.split(',').map(c => c.trim());
-      const companyConds = companies.map(() => `a.CompanyName = ?`).join(' OR ');
-      filterConditions += ` AND (${companyConds})`;
-      filterParams.push(...companies);
-    }
-    if (categoryQuery) {
-      const categories = categoryQuery.split(',').map(c => c.trim());
-      const categoryConds = categories.map(() => `a.CategoryAsset = ?`).join(' OR ');
-      filterConditions += ` AND (${categoryConds})`;
-      filterParams.push(...categories);
-    }
-    if (locationQuery) {
-      const locations = locationQuery.split(',').map(l => l.trim());
-      const locationConds = locations.map(() => `a.LocationAsset = ?`).join(' OR ');
-      filterConditions += ` AND (${locationConds})`;
-      filterParams.push(...locations);
-    }
+      if (companyQuery) {
+        const companies = companyQuery.split(",").map((c) => c.trim());
+        const companyConds = companies
+          .map(() => `a.CompanyName = ?`)
+          .join(" OR ");
+        filterConditions += ` AND (${companyConds})`;
+        filterParams.push(...companies);
+      }
+      if (categoryQuery) {
+        const categories = categoryQuery.split(",").map((c) => c.trim());
+        const categoryConds = categories
+          .map(() => `a.CategoryAsset = ?`)
+          .join(" OR ");
+        filterConditions += ` AND (${categoryConds})`;
+        filterParams.push(...categories);
+      }
+      if (locationQuery) {
+        const locations = locationQuery.split(",").map((l) => l.trim());
+        const locationConds = locations
+          .map(() => `a.LocationAsset = ?`)
+          .join(" OR ");
+        filterConditions += ` AND (${locationConds})`;
+        filterParams.push(...locations);
+      }
 
-    // Ambil assetCode unik dengan paging
-    const [assetCodesRows] = await pool.query(
-      `SELECT DISTINCT b.AssetCode 
+      // Ambil assetCode unik dengan paging
+      const [assetCodesRows] = await pool.query(
+        `SELECT DISTINCT b.AssetCode 
        FROM tb_stockopname_bom b 
        LEFT JOIN asset a ON b.AssetCode = a.AssetCode 
        WHERE ${filterConditions} 
        ORDER BY b.AssetCode DESC 
        LIMIT ? OFFSET ?`,
-      [...filterParams, limit, offset]
-    );
+        [...filterParams, limit, offset],
+      );
 
-    const assetCodes = assetCodesRows.map(row => row.AssetCode);
+      const assetCodes = assetCodesRows.map((row) => row.AssetCode);
 
-    if (assetCodes.length === 0) {
-      return res.status(404).json({
-        message: `Tidak ada asset BOM untuk NoSO: ${noso} dengan filter yang diberikan`
-      });
-    }
+      if (assetCodes.length === 0) {
+        return res.status(404).json({
+          message: `Tidak ada asset BOM untuk NoSO: ${noso} dengan filter yang diberikan`,
+        });
+      }
 
-    // 2. Query detail asset (mirip seperti query lama dari tb_stockopname_d, tapi sekarang dari asset)
-    const dataQuery = `
+      // 2. Query detail asset (mirip seperti query lama dari tb_stockopname_d, tapi sekarang dari asset)
+      const dataQuery = `
       SELECT 
         a.AssetCode, 
         a.AssetName, 
@@ -102,75 +109,83 @@ router.get('/no-stock-opname-current-bom/:noso', verifyToken, async (req, res) =
       ORDER BY a.AssetCode DESC
     `;
 
-    const [rows] = await pool.query(dataQuery, [noso, assetCodes]);
+      const [rows] = await pool.query(dataQuery, [noso, assetCodes]);
 
-    // 3. Hitung partsCount dari tb_stockopname_bom (bukan tb_parts_bom)
-    let bomCountMap = {};
-    if (assetCodes.length > 0) {
-      const [bomCounts] = await pool.query(`
+      // 3. Hitung partsCount dari tb_stockopname_bom (bukan tb_parts_bom)
+      let bomCountMap = {};
+      if (assetCodes.length > 0) {
+        const [bomCounts] = await pool.query(
+          `
         SELECT AssetCode, COUNT(*) as partsCount
         FROM tb_stockopname_bom
         WHERE AssetCode IN (?) AND NoSO = ?
         GROUP BY AssetCode
-      `, [assetCodes, noso]);
+      `,
+          [assetCodes, noso],
+        );
 
-      bomCountMap = bomCounts.reduce((acc, item) => {
-        acc[item.AssetCode] = item.partsCount;
-        return acc;
-      }, {});
-    }
+        bomCountMap = bomCounts.reduce((acc, item) => {
+          acc[item.AssetCode] = item.partsCount;
+          return acc;
+        }, {});
+      }
 
-    // 4. Hitung qtyFound (jumlah parts yang ditemukan) dari tb_stockopname_hasil_bom
-    let bomQtyFoundMap = {};
-    if (assetCodes.length > 0) {
-      const [foundCounts] = await pool.query(`
+      // 4. Hitung qtyFound (jumlah parts yang ditemukan) dari tb_stockopname_hasil_bom
+      let bomQtyFoundMap = {};
+      if (assetCodes.length > 0) {
+        const [foundCounts] = await pool.query(
+          `
         SELECT AssetCode, COUNT(*) as totalFound
         FROM tb_stockopname_hasil_bom
         WHERE AssetCode IN (?) AND NoSO = ?
         GROUP BY AssetCode
-      `, [assetCodes, noso]);
+      `,
+          [assetCodes, noso],
+        );
 
-      bomQtyFoundMap = foundCounts.reduce((acc, item) => {
-        acc[item.AssetCode] = parseInt(item.totalFound) || 0;
-        return acc;
-      }, {});
-    }
+        bomQtyFoundMap = foundCounts.reduce((acc, item) => {
+          acc[item.AssetCode] = parseInt(item.totalFound) || 0;
+          return acc;
+        }, {});
+      }
 
-    // 5. Pasangkan partsCount dan qtyFound ke setiap row
-    rows.forEach(row => {
-      row.partsCount = bomCountMap[row.AssetCode] || 0;
-      row.qtyFound = bomQtyFoundMap[row.AssetCode] || 0;
-    });
+      // 5. Pasangkan partsCount dan qtyFound ke setiap row
+      rows.forEach((row) => {
+        row.partsCount = bomCountMap[row.AssetCode] || 0;
+        row.qtyFound = bomQtyFoundMap[row.AssetCode] || 0;
+      });
 
-    // 6. Hitung total untuk pagination
-    const [countResult] = await pool.query(`
+      // 6. Hitung total untuk pagination
+      const [countResult] = await pool.query(
+        `
       SELECT COUNT(DISTINCT b.AssetCode) as total
       FROM tb_stockopname_bom b
       LEFT JOIN asset a ON b.AssetCode = a.AssetCode
       WHERE ${filterConditions}
-    `, filterParams);
+    `,
+        filterParams,
+      );
 
-    const total = countResult[0]?.total || 0;
+      const total = countResult[0]?.total || 0;
 
-    // 7. Kirim response
-    res.json({
-      data: rows,
-      total,
-      nextOffset: offset + limit,
-      hasMore: offset + limit < total
-    });
+      // 7. Kirim response
+      res.json({
+        data: rows,
+        total,
+        nextOffset: offset + limit,
+        hasMore: offset + limit < total,
+      });
+    } catch (error) {
+      console.error("Error:", error.message);
+      res.status(500).json({
+        message: "Internal Server Error",
+        error: error.message,
+      });
+    }
+  },
+);
 
-  } catch (error) {
-    console.error('Error:', error.message);
-    res.status(500).json({
-      message: 'Internal Server Error',
-      error: error.message
-    });
-  }
-});
-
-
-router.get('/part-bom', async (req, res) => {
+router.get("/part-bom", async (req, res) => {
   try {
     await connectDb(); // koneksi ke DB jika diperlukan
 
@@ -178,11 +193,14 @@ router.get('/part-bom', async (req, res) => {
     const noSO = req.query.noSO;
 
     if (!assetCode) {
-      return res.status(400).json({ message: 'AssetCode is required as query parameter' });
+      return res
+        .status(400)
+        .json({ message: "AssetCode is required as query parameter" });
     }
 
     // 🔍 Ambil semua data BOM berdasarkan AssetCode
-    const [bomRows] = await pool.query(`
+    const [bomRows] = await pool.query(
+      `
       SELECT 
         id,
         id_nested,
@@ -196,16 +214,19 @@ router.get('/part-bom', async (req, res) => {
       FROM tb_parts_bom
       WHERE AssetCode = ?
       ORDER BY level, part ASC
-    `, [assetCode]);
+    `,
+      [assetCode],
+    );
 
     if (bomRows.length === 0) {
-      return res.status(404).json({ 
-        message: `Tidak ada data part untuk AssetCode: ${assetCode}` 
+      return res.status(404).json({
+        message: `Tidak ada data part untuk AssetCode: ${assetCode}`,
       });
     }
 
     // 🔍 Ambil data hasil stock opname (qty_found & remark)
-    const [stockOpnameRows] = await pool.query(`
+    const [stockOpnameRows] = await pool.query(
+      `
       SELECT 
         AssetCode,
         IdBOM,
@@ -213,23 +234,27 @@ router.get('/part-bom', async (req, res) => {
         Remark
       FROM tb_stockopname_hasil_bom
       WHERE AssetCode = ? AND NosO = ?
-    `, [assetCode, noSO]);
+    `,
+      [assetCode, noSO],
+    );
 
     // 🔁 Mapping berdasarkan IdBOM
     const qtyFoundMap = {};
     const remarkMap = {};
 
-    stockOpnameRows.forEach(row => {
+    stockOpnameRows.forEach((row) => {
       qtyFoundMap[row.IdBOM] = row.QtyFound;
       remarkMap[row.IdBOM] = row.Remark;
     });
 
     // Kelompokkan data berdasarkan relationship dan sub parts
     const groupedData = [];
-    const relationshipItems = bomRows.filter(item => item.level === 'relationship');
-    const subItems = bomRows.filter(item => item.level !== 'relationship');
+    const relationshipItems = bomRows.filter(
+      (item) => item.level === "relationship",
+    );
+    const subItems = bomRows.filter((item) => item.level !== "relationship");
 
-    relationshipItems.forEach(relationship => {
+    relationshipItems.forEach((relationship) => {
       // Tambahkan relationship sebagai group
       const group = {
         id: relationship.id,
@@ -240,18 +265,21 @@ router.get('/part-bom', async (req, res) => {
         part: relationship.part,
         uom: relationship.uom,
         qty_on_hand: parseFloat(relationship.qty_on_hand).toString(),
-        qty_found: qtyFoundMap[relationship.id] !== undefined 
-          ? parseFloat(qtyFoundMap[relationship.id]).toString() 
-          : null,
-        remark: remarkMap[relationship.id] || '',
-        parts: []
+        qty_found:
+          qtyFoundMap[relationship.id] !== undefined
+            ? parseFloat(qtyFoundMap[relationship.id]).toString()
+            : null,
+        remark: remarkMap[relationship.id] || "",
+        parts: [],
       };
 
       // Cari semua sub items yang parent-nya adalah id_nested dari relationship
-      const relatedParts = subItems.filter(item => item.parent === relationship.id_nested);
-      
+      const relatedParts = subItems.filter(
+        (item) => item.parent === relationship.id_nested,
+      );
+
       // Format sub items
-      relatedParts.forEach(part => {
+      relatedParts.forEach((part) => {
         group.parts.push({
           id: part.id,
           id_nested: part.id_nested,
@@ -261,10 +289,11 @@ router.get('/part-bom', async (req, res) => {
           part: part.part,
           qty_on_hand: parseFloat(part.qty_on_hand).toString(),
           uom: part.uom,
-          qty_found: qtyFoundMap[part.id] !== undefined 
-            ? parseFloat(qtyFoundMap[part.id]).toString() 
-            : null,
-          remark: remarkMap[part.id] || ''
+          qty_found:
+            qtyFoundMap[part.id] !== undefined
+              ? parseFloat(qtyFoundMap[part.id]).toString()
+              : null,
+          remark: remarkMap[part.id] || "",
         });
       });
 
@@ -272,11 +301,11 @@ router.get('/part-bom', async (req, res) => {
     });
 
     // Tambahkan items yang tidak memiliki relationship (jika ada)
-    const ungroupedItems = subItems.filter(item => 
-      !relationshipItems.some(rel => rel.id_nested === item.parent)
+    const ungroupedItems = subItems.filter(
+      (item) => !relationshipItems.some((rel) => rel.id_nested === item.parent),
     );
-    
-    ungroupedItems.forEach(item => {
+
+    ungroupedItems.forEach((item) => {
       groupedData.push({
         id: item.id,
         id_nested: item.id_nested,
@@ -286,11 +315,12 @@ router.get('/part-bom', async (req, res) => {
         part: item.part,
         qty_on_hand: parseFloat(item.qty_on_hand).toString(),
         uom: item.uom,
-        qty_found: qtyFoundMap[item.id] !== undefined 
-          ? parseFloat(qtyFoundMap[item.id]).toString() 
-          : null,
-        remark: remarkMap[item.id] || '',
-        parts: [] // Tidak ada sub parts
+        qty_found:
+          qtyFoundMap[item.id] !== undefined
+            ? parseFloat(qtyFoundMap[item.id]).toString()
+            : null,
+        remark: remarkMap[item.id] || "",
+        parts: [], // Tidak ada sub parts
       });
     });
 
@@ -298,18 +328,16 @@ router.get('/part-bom', async (req, res) => {
     res.json({
       assetCode,
       totalParts: bomRows.length,
-      data: groupedData
+      data: groupedData,
     });
-
   } catch (error) {
-    console.error('Error saat mengambil part bom:', error.message);
-    res.status(500).json({ 
-      message: 'Internal Server Error',
-      error: error.message 
+    console.error("Error saat mengambil part bom:", error.message);
+    res.status(500).json({
+      message: "Internal Server Error",
+      error: error.message,
     });
   }
 });
-
 
 //SIMPAN HASIL BOM KE DB (SEMENTARA DI NONAKTIFKAN KARENA ADANYA PERUBAHAN RULES SAAT SUBMIT)
 // router.post('/submit-bom', verifyToken, async (req, res) => {
@@ -338,7 +366,7 @@ router.get('/part-bom', async (req, res) => {
 
 //     // Simpan data hasil BOM
 //     const [result] = await pool.query(
-//       `INSERT INTO tb_stockopname_hasil_bom 
+//       `INSERT INTO tb_stockopname_hasil_bom
 //         (NoSO, AssetCode, IdBOM, QtyFound, Remark)
 //        VALUES ?`,
 //       [values]
@@ -347,7 +375,7 @@ router.get('/part-bom', async (req, res) => {
 //     // Update id_user pada tb_stockopname_d
 //     if (idUser) {
 //       await pool.query(
-//         `UPDATE tb_stockopname_d 
+//         `UPDATE tb_stockopname_d
 //          SET id_user = ?
 //          WHERE NoSO = ? AND AssetCode = ?`,
 //         [idUser, noSO, assetCode]
@@ -368,9 +396,7 @@ router.get('/part-bom', async (req, res) => {
 //   }
 // });
 
-
-
-router.post('/submit-bom', verifyToken, async (req, res) => {
+router.post("/submit-bom", verifyToken, async (req, res) => {
   try {
     await connectDb();
 
@@ -378,20 +404,22 @@ router.post('/submit-bom', verifyToken, async (req, res) => {
     const idUser = req.user?.id_user || null;
 
     if (!noSO || !assetCode || !Array.isArray(data)) {
-      return res.status(400).json({ message: 'noSO, assetCode dan data (array) diperlukan.' });
+      return res
+        .status(400)
+        .json({ message: "noSO, assetCode dan data (array) diperlukan." });
     }
 
     if (data.length === 0) {
-      return res.status(400).json({ message: 'Data BOM kosong.' });
+      return res.status(400).json({ message: "Data BOM kosong." });
     }
 
     // Mapping data untuk UPSERT (update if exists)
-    const values = data.map(item => [
+    const values = data.map((item) => [
       noSO,
       assetCode,
       item.idBOM,
       item.qtyFound,
-      item.remark || null
+      item.remark || null,
     ]);
 
     const [result] = await pool.query(
@@ -401,7 +429,7 @@ router.post('/submit-bom', verifyToken, async (req, res) => {
        ON DUPLICATE KEY UPDATE 
          QtyFound = VALUES(QtyFound),
          Remark = VALUES(Remark)`,
-      [values]
+      [values],
     );
 
     // Update id_user pada tb_stockopname_d
@@ -410,26 +438,24 @@ router.post('/submit-bom', verifyToken, async (req, res) => {
         `UPDATE tb_stockopname_d 
          SET id_user = ?
          WHERE NoSO = ? AND AssetCode = ?`,
-        [idUser, noSO, assetCode]
+        [idUser, noSO, assetCode],
       );
     }
 
     res.status(200).json({
-      message: 'Data BOM berhasil diperbarui.',
-      affectedRows: result.affectedRows
+      message: "Data BOM berhasil diperbarui.",
+      affectedRows: result.affectedRows,
     });
-
   } catch (error) {
-    console.error('Gagal mengupdate data BOM:', error.message);
+    console.error("Gagal mengupdate data BOM:", error.message);
     res.status(500).json({
-      message: 'Internal Server Error',
-      error: error.message
+      message: "Internal Server Error",
+      error: error.message,
     });
   }
 });
 
-
-router.post('/update-bom', verifyToken, async (req, res) => {
+router.post("/update-bom", verifyToken, async (req, res) => {
   try {
     await connectDb();
 
@@ -437,20 +463,22 @@ router.post('/update-bom', verifyToken, async (req, res) => {
     const idUser = req.user?.id_user || null;
 
     if (!noSO || !assetCode || !Array.isArray(data)) {
-      return res.status(400).json({ message: 'noSO, assetCode dan data (array) diperlukan.' });
+      return res
+        .status(400)
+        .json({ message: "noSO, assetCode dan data (array) diperlukan." });
     }
 
     if (data.length === 0) {
-      return res.status(400).json({ message: 'Data BOM kosong.' });
+      return res.status(400).json({ message: "Data BOM kosong." });
     }
 
     // Mapping data untuk UPSERT (update if exists)
-    const values = data.map(item => [
+    const values = data.map((item) => [
       noSO,
       assetCode,
       item.idBOM,
       item.qtyFound,
-      item.remark || null
+      item.remark || null,
     ]);
 
     const [result] = await pool.query(
@@ -460,7 +488,7 @@ router.post('/update-bom', verifyToken, async (req, res) => {
        ON DUPLICATE KEY UPDATE 
          QtyFound = VALUES(QtyFound),
          Remark = VALUES(Remark)`,
-      [values]
+      [values],
     );
 
     // Update id_user pada tb_stockopname_d
@@ -469,74 +497,72 @@ router.post('/update-bom', verifyToken, async (req, res) => {
         `UPDATE tb_stockopname_d 
          SET id_user = ?
          WHERE NoSO = ? AND AssetCode = ?`,
-        [idUser, noSO, assetCode]
+        [idUser, noSO, assetCode],
       );
     }
 
     res.status(200).json({
-      message: 'Data BOM berhasil diperbarui.',
-      affectedRows: result.affectedRows
+      message: "Data BOM berhasil diperbarui.",
+      affectedRows: result.affectedRows,
     });
-
   } catch (error) {
-    console.error('Gagal mengupdate data BOM:', error.message);
+    console.error("Gagal mengupdate data BOM:", error.message);
     res.status(500).json({
-      message: 'Internal Server Error',
-      error: error.message
+      message: "Internal Server Error",
+      error: error.message,
     });
   }
 });
-
-
-
-
-
-
-
 
 ///////////////////////////////////////////UNDER_CONSTRUCTION///////////////////////////////////////////////////////////
 
-  // Route to get Asset data based on NoSO
-  router.get('/no-stock-opname/:noso', verifyToken, async (req, res) => {
-    try {
-      await connectDb();
-  
-      const { noso } = req.params;
-      const limit = 50;
-      const offset = parseInt(req.query.offset) || 0;
-      const companyQuery = req.query.company;
-      const categoryQuery = req.query.category;
-      const locationQuery = req.query.location;
-  
-      let filterConditions = 'h.NoSO = ?';
-      const queryParams = [noso];
-  
-      // ✅ Filter berdasarkan Company (langsung dari a.CompanyName)
-      if (companyQuery) {
-        const companyList = companyQuery.split(',').map(c => c.trim());
-        const companyConditions = companyList.map(() => `a.CompanyName = ?`).join(' OR ');
-        filterConditions += ` AND (${companyConditions})`;
-        queryParams.push(...companyList);
-      }
-  
-      // ✅ Filter berdasarkan Category (langsung dari a.CategoryAsset)
-      if (categoryQuery) {
-        const categoryList = categoryQuery.split(',').map(c => c.trim());
-        const categoryConditions = categoryList.map(() => `a.CategoryAsset = ?`).join(' OR ');
-        filterConditions += ` AND (${categoryConditions})`;
-        queryParams.push(...categoryList);
-      }
-  
-      // ✅ Filter berdasarkan Location (langsung dari a.LocationAsset)
-      if (locationQuery) {
-        const locationList = locationQuery.split(',').map(l => l.trim());
-        const locationConditions = locationList.map(() => `a.LocationAsset = ?`).join(' OR ');
-        filterConditions += ` AND (${locationConditions})`;
-        queryParams.push(...locationList);
-      }
-  
-      // Query data hasil scan
-      const dataQuery = `
+// Route to get Asset data based on NoSO
+router.get("/no-stock-opname/:noso", verifyToken, async (req, res) => {
+  try {
+    await connectDb();
+
+    const { noso } = req.params;
+    const limit = 50;
+    const offset = parseInt(req.query.offset) || 0;
+    const companyQuery = req.query.company;
+    const categoryQuery = req.query.category;
+    const locationQuery = req.query.location;
+
+    let filterConditions = "h.NoSO = ?";
+    const queryParams = [noso];
+
+    // ✅ Filter berdasarkan Company (langsung dari a.CompanyName)
+    if (companyQuery) {
+      const companyList = companyQuery.split(",").map((c) => c.trim());
+      const companyConditions = companyList
+        .map(() => `a.CompanyName = ?`)
+        .join(" OR ");
+      filterConditions += ` AND (${companyConditions})`;
+      queryParams.push(...companyList);
+    }
+
+    // ✅ Filter berdasarkan Category (langsung dari a.CategoryAsset)
+    if (categoryQuery) {
+      const categoryList = categoryQuery.split(",").map((c) => c.trim());
+      const categoryConditions = categoryList
+        .map(() => `a.CategoryAsset = ?`)
+        .join(" OR ");
+      filterConditions += ` AND (${categoryConditions})`;
+      queryParams.push(...categoryList);
+    }
+
+    // ✅ Filter berdasarkan Location (langsung dari a.LocationAsset)
+    if (locationQuery) {
+      const locationList = locationQuery.split(",").map((l) => l.trim());
+      const locationConditions = locationList
+        .map(() => `a.LocationAsset = ?`)
+        .join(" OR ");
+      filterConditions += ` AND (${locationConditions})`;
+      queryParams.push(...locationList);
+    }
+
+    // Query data hasil scan
+    const dataQuery = `
         SELECT 
           h.AssetCode, 
           u.Username, 
@@ -551,68 +577,66 @@ router.post('/update-bom', verifyToken, async (req, res) => {
         ORDER BY h.DateTimeScan DESC
         LIMIT ? OFFSET ?
       `;
-      queryParams.push(limit, offset);
-  
-      const [rows] = await pool.query(dataQuery, queryParams);
-  
-      // Query total count
-      const countQuery = `
+    queryParams.push(limit, offset);
+
+    const [rows] = await pool.query(dataQuery, queryParams);
+
+    // Query total count
+    const countQuery = `
         SELECT COUNT(*) as total 
         FROM tb_stockopname_d_hasil h
         LEFT JOIN asset a ON h.AssetCode = a.AssetCode
         WHERE ${filterConditions}
       `;
-      const [countResult] = await pool.query(countQuery, queryParams.slice(0, -2));
-  
-      const total = countResult[0]?.total || 0;
-  
-      if (rows.length === 0) {
-        return res.status(404).json({ message: `Tidak ada data asset untuk NoSO: ${noso}` });
-      }
-  
-      res.json({
-        data: rows,
-        total,
-        nextOffset: offset + limit,
-        hasMore: offset + limit < total
-      });
-  
-    } catch (error) {
-      console.error('Error:', error.message);
-      res.status(500).json({ message: 'Internal Server Error' });
+    const [countResult] = await pool.query(
+      countQuery,
+      queryParams.slice(0, -2),
+    );
+
+    const total = countResult[0]?.total || 0;
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: `Tidak ada data asset untuk NoSO: ${noso}` });
     }
-  });
-  
 
+    res.json({
+      data: rows,
+      total,
+      nextOffset: offset + limit,
+      hasMore: offset + limit < total,
+    });
+  } catch (error) {
+    console.error("Error:", error.message);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
 
-  //UPDATE ASSET DETAIL PADA STOCKOPNAME_D
-router.put('/update-stock-opname', verifyToken, async (req, res) => {
-    try {
-      await connectDb();
-  
-      const {
-        noSO,
-        assetCode,
-        image,
-        idStatus,
-        isUpdateValid
-      } = req.body;
-  
-      const idUser = req.user.id_user;
-  
-      console.log("🟡 ID User dari JWT:", idUser);
-  
-      // Validasi input
-      if (!noSO || !assetCode) {
-        return res.status(400).json({ message: 'NoSO dan AssetCode wajib diisi' });
-      }
-  
-      let query = '';
-      let values = [];
-  
-      if (isUpdateValid) {
-        // Update data seperti biasa
-        query = `
+//UPDATE ASSET DETAIL PADA STOCKOPNAME_D
+router.put("/update-stock-opname", verifyToken, async (req, res) => {
+  try {
+    await connectDb();
+
+    const { noSO, assetCode, image, idStatus, isUpdateValid } = req.body;
+
+    const idUser = req.user.id_user;
+
+    console.log("🟡 ID User dari JWT:", idUser);
+
+    // Validasi input
+    if (!noSO || !assetCode) {
+      return res
+        .status(400)
+        .json({ message: "NoSO dan AssetCode wajib diisi" });
+    }
+
+    let query = "";
+    let values = [];
+
+    if (isUpdateValid) {
+      // Update data seperti biasa
+      query = `
           UPDATE tb_stockopname_d 
           SET 
             HasNotBeenPrinted = 1, 
@@ -621,32 +645,33 @@ router.put('/update-stock-opname', verifyToken, async (req, res) => {
             id_user = ? 
           WHERE NoSO = ? AND AssetCode = ?
         `;
-        values = [
-          image ?? null,
-          idStatus ?? null,
-          idUser,
-          noSO,
-          assetCode
-        ];
-      } else {
-        // Hapus gambar dari file system jika ada
-        const imagePath = path.join(__dirname, '..', '..', 'storage', 'uploads', image);
-      
-        try {
-          // Cek apakah file gambar ada, lalu hapus
-          if (fs.existsSync(imagePath)) {
-            fs.unlinkSync(imagePath);  // Hapus file
-            console.log(`✅ File gambar ${image} berhasil dihapus`);
-          } else {
-            console.log(`⚠️ File gambar ${image} tidak ditemukan`);
-          }
-        } catch (err) {
-          console.error(`❌ Gagal menghapus file gambar: ${err.message}`);
-          // Lanjutkan proses meskipun gagal menghapus file
+      values = [image ?? null, idStatus ?? null, idUser, noSO, assetCode];
+    } else {
+      // Hapus gambar dari file system jika ada
+      const imagePath = path.join(
+        __dirname,
+        "..",
+        "..",
+        "storage",
+        "uploads",
+        image,
+      );
+
+      try {
+        // Cek apakah file gambar ada, lalu hapus
+        if (fs.existsSync(imagePath)) {
+          fs.unlinkSync(imagePath); // Hapus file
+          console.log(`✅ File gambar ${image} berhasil dihapus`);
+        } else {
+          console.log(`⚠️ File gambar ${image} tidak ditemukan`);
         }
-      
-        // Reset data
-        query = `
+      } catch (err) {
+        console.error(`❌ Gagal menghapus file gambar: ${err.message}`);
+        // Lanjutkan proses meskipun gagal menghapus file
+      }
+
+      // Reset data
+      query = `
           UPDATE tb_stockopname_d 
           SET 
             HasNotBeenPrinted = 0, 
@@ -655,23 +680,24 @@ router.put('/update-stock-opname', verifyToken, async (req, res) => {
             id_user = NULL 
           WHERE NoSO = ? AND AssetCode = ?
         `;
-        values = [noSO, assetCode];
-      }
-      
-  
-      const [result] = await pool.query(query, values);
-  
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: 'Data tidak ditemukan atau tidak berubah' });
-      }
-  
-      res.json({ message: 'Data berhasil diupdate' });
-  
-    } catch (error) {
-      console.error('Update error:', error.message);
-      res.status(500).json({ message: 'Internal Server Error', error: error.message });
+      values = [noSO, assetCode];
     }
-  });
 
+    const [result] = await pool.query(query, values);
 
-  module.exports = router;
+    if (result.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ message: "Data tidak ditemukan atau tidak berubah" });
+    }
+
+    res.json({ message: "Data berhasil diupdate" });
+  } catch (error) {
+    console.error("Update error:", error.message);
+    res
+      .status(500)
+      .json({ message: "Internal Server Error", error: error.message });
+  }
+});
+
+module.exports = router;

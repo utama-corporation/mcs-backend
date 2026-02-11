@@ -1,21 +1,20 @@
-const express = require('express');
-const verifyToken = require('../middleware/verifyToken'); // Middleware to verify JWT token
-const moment = require('moment');
-const { pool, connectDb } = require('../../db');  // Import MySQL connection pool
+const express = require("express");
+const verifyToken = require("../middleware/verifyToken"); // Middleware to verify JWT token
+const moment = require("moment");
+const { pool, connectDb } = require("../../db"); // Import MySQL connection pool
 const router = express.Router();
 const axios = require("axios");
 const cheerio = require("cheerio");
-const { broadcast } = require('../../websocket'); // Import dari root
-const path = require('path'); // Pastikan path diimpor
-const fs = require('fs');
-require('moment/locale/id');
-moment.locale('id'); // Set ke bahasa Indonesia
+const { broadcast } = require("../../websocket"); // Import dari root
+const path = require("path"); // Pastikan path diimpor
+const fs = require("fs");
+require("moment/locale/id");
+moment.locale("id"); // Set ke bahasa Indonesia
 
 // Helper function to format dates using Moment.js
 const formatDate = (date) => {
-  return moment(date).format('DD MMMM YYYY');
+  return moment(date).format("DD MMMM YYYY");
 };
-
 
 //SIMPAN HASIL SCAN KE DATABASE
 router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
@@ -81,9 +80,7 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
       categoryCode = codeResults[0].categoryCode;
       locationCode = codeResults[0].locationCode;
     } else {
-      return res
-        .status(404)
-        .json({ message: "AssetCode tidak terdaftar!" });
+      return res.status(404).json({ message: "AssetCode tidak terdaftar!" });
     }
 
     // Validasi referensi
@@ -116,7 +113,7 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
     // Cek duplikat
     const [duplicateResult] = await pool.query(
       `SELECT COUNT(*) AS count FROM tb_stockopname_d_hasil WHERE NoSO = ? AND AssetCode = ?`,
-      [noso, AssetCode]
+      [noso, AssetCode],
     );
     if (duplicateResult[0].count > 0) {
       responsePayload.message = `Asset ${AssetCode} telah discan sebelumnya!`;
@@ -127,7 +124,7 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
     // Cek asset master
     const [assetResult] = await pool.query(
       `SELECT created_at, AssetName FROM asset WHERE AssetCode = ?`,
-      [AssetCode]
+      [AssetCode],
     );
 
     if (assetResult.length === 0) {
@@ -143,7 +140,7 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
     // Ambil tanggal SO
     const [soResult] = await pool.query(
       `SELECT Tanggal FROM tb_stockopname_h WHERE NoSO = ?`,
-      [noso]
+      [noso],
     );
     if (soResult.length === 0) {
       responsePayload.status = "FAILED";
@@ -174,20 +171,18 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
   }
 });
 
-
-
 router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
   try {
     const pool = await connectDb();
     const { noso } = req.params;
-    const { AssetCode, AssetName } = req.body; 
+    const { AssetCode, AssetName } = req.body;
     const Username = req.user?.username || null;
     const idUser = req.user?.id_user || null;
 
     if (!AssetCode || !AssetName) {
       return res.status(400).json({
         status: "FAILED",
-        message: "AssetCode dan AssetName wajib diisi"
+        message: "AssetCode dan AssetName wajib diisi",
       });
     }
 
@@ -197,14 +192,24 @@ router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
       FROM tb_stockopname_d 
       WHERE NoSO = ? AND AssetCode = ?
     `;
-    const [masterDataResult] = await pool.query(checkMasterDataSql, [noso, AssetCode]);
+    const [masterDataResult] = await pool.query(checkMasterDataSql, [
+      noso,
+      AssetCode,
+    ]);
 
     if (masterDataResult.length > 0) {
       const masterData = masterDataResult[0];
 
       // 🔹 Hapus file gambar jika ada
       if (masterData.Image) {
-        const imagePath = path.join(__dirname, "..", "..", "storage", "uploads", masterData.Image);
+        const imagePath = path.join(
+          __dirname,
+          "..",
+          "..",
+          "storage",
+          "uploads",
+          masterData.Image,
+        );
         try {
           if (fs.existsSync(imagePath)) {
             fs.unlinkSync(imagePath);
@@ -245,8 +250,8 @@ router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
       data: {
         assetCode: AssetCode,
         assetName: AssetName,
-        username: Username
-      }
+        username: Username,
+      },
     });
 
     // 🔹 Broadcast ke client lain
@@ -270,8 +275,6 @@ router.post("/no-stock-opname/:noso/submit", verifyToken, async (req, res) => {
   }
 });
 
-
-
 //Fungsi untuk fetch AssetCode dan AssetName berdasarkan QR Code
 async function fetchAssetDataFromPage(url) {
   try {
@@ -279,22 +282,29 @@ async function fetchAssetDataFromPage(url) {
     const $ = cheerio.load(response.data);
 
     // Ambil AssetCode dari elemen yang sesuai
-    const assetCode = $("#AssetCodeTable").text().trim() || $("span.asset-code").text().trim();
+    const assetCode =
+      $("#AssetCodeTable").text().trim() || $("span.asset-code").text().trim();
 
     // Ambil AssetName dari elemen yang sesuai
-    const assetName = $("#AssetNameTable").text().trim() || $("span.asset-name").text().trim();
+    const assetName =
+      $("#AssetNameTable").text().trim() || $("span.asset-name").text().trim();
 
+    const companyName =
+      $("#CompanyNameTable").text().trim() ||
+      $("span.asset-company").text().trim();
 
-    const companyName = $("#CompanyNameTable").text().trim() || $("span.asset-company").text().trim();
+    const categoryName =
+      $("#CategoryAssetTable").text().trim() ||
+      $("span.asset-category").text().trim();
 
-    const categoryName = $("#CategoryAssetTable").text().trim() || $("span.asset-category").text().trim();
-
-    const locationName = $("#LocationAssetTable").text().trim() || $("span.asset-location").text().trim();
-
-
+    const locationName =
+      $("#LocationAssetTable").text().trim() ||
+      $("span.asset-location").text().trim();
 
     if (!assetCode || !assetName) {
-      throw new Error("AssetCode atau AssetName tidak ditemukan dalam halaman web.");
+      throw new Error(
+        "AssetCode atau AssetName tidak ditemukan dalam halaman web.",
+      );
     }
 
     return { assetCode, assetName, companyName, categoryName, locationName };
@@ -303,6 +313,5 @@ async function fetchAssetDataFromPage(url) {
     return null;
   }
 }
-
 
 module.exports = router;
