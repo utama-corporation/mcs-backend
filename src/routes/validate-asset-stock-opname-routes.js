@@ -123,7 +123,7 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
 
     // Cek asset master
     const [assetResult] = await pool.query(
-      `SELECT created_at, AssetName FROM asset WHERE AssetCode = ?`,
+      `SELECT created_at, AssetName, active FROM asset WHERE AssetCode = ? LIMIT 1`,
       [AssetCode],
     );
 
@@ -131,6 +131,13 @@ router.post("/no-stock-opname/:noso/check", verifyToken, async (req, res) => {
       responsePayload.status = "FAILED";
       responsePayload.message = "AssetCode tidak ditemukan di master data!";
       return res.status(404).json(responsePayload);
+    }
+
+    if ((assetResult[0].active || "").toLowerCase() !== "active") {
+      responsePayload.status = "FAILED";
+      responsePayload.message =
+        "Asset tidak aktif, tidak bisa diproses stock opname!";
+      return res.status(400).json(responsePayload);
     }
 
     const createdAt = new Date(assetResult[0].created_at);
