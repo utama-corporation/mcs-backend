@@ -8,7 +8,7 @@ echo "===================================="
 cd "$(dirname "$0")"
 
 echo "[1/3] Git pull..."
-git pull origin master
+git pull origin production
 
 echo "[2/3] Build & restart container..."
 docker compose up -d --build

@@ -3,14 +3,14 @@ name: Deploy to Server
 on:
   push:
     branches:
-      - master
+      - production
 
 jobs:
   deploy:
     runs-on: self-hosted
     steps:
       - name: Pull latest code
-        run: git pull origin master
+        run: git pull origin production
         working-directory: D:\backend\mcs_backend
 
       - name: Deploy with Docker
