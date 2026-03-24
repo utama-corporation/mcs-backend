@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    container_name: mcs-backend
+    ports:
+      - "6000:6000"
+    env_file: .env
+    volumes:
+      - ${UPLOADS_HOST_DIR}:/app/storage/uploads
+    restart: always
+
+  # Uncomment saat Redis dibutuhkan:
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: mcs-redis
+  #   restart: always
+  #   volumes:
+  #     - redis_data:/data
+
+# volumes:
+#   redis_data:
