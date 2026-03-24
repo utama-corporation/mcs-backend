@@ -74,7 +74,7 @@ app.use("/api", nonPartsStockOpnameRoutes);
 connectDb()
   .then(() => {
     server.listen(port, () => {
-      console.log(`Server berjalan di http://localhost:${port}`);
+      console.log(`Server telah berjalan di http://localhost:${port}`);
     });
   })
   .catch((err) => {
