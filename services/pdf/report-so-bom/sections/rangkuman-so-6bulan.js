@@ -30,13 +30,13 @@ function monthKey(d) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}`;
 }
-function getLast6MonthKeys(tanggalAcuan) {
+function getLast6MonthKeys(tanggalAcuan, count = 6) {
   const acuan =
     tanggalAcuan instanceof Date ? tanggalAcuan : new Date(tanggalAcuan);
   if (Number.isNaN(acuan.getTime())) return [];
 
   const keys = [];
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < count; i++) {
     const dt = new Date(acuan.getFullYear(), acuan.getMonth() - i, 1);
     keys.push(monthKey(dt));
   }
@@ -96,8 +96,8 @@ async function getSixMonthMatches(
   const acuan = new Date(tanggalAcuan);
   if (Number.isNaN(acuan.getTime())) throw new Error("Tanggal acuan invalid");
 
-  // Window 6 bulan kalender: bulan acuan + 5 bulan ke belakang.
-  const start = new Date(acuan.getFullYear(), acuan.getMonth() - 5, 1);
+  // Window 7 bulan kalender: bulan acuan + 6 bulan ke belakang (bulan ke-7 untuk baseline delta).
+  const start = new Date(acuan.getFullYear(), acuan.getMonth() - 6, 1);
   const end = new Date(acuan.getFullYear(), acuan.getMonth() + 1, 0);
 
   const inCompany = buildInPlaceholders(setCompany);
@@ -180,10 +180,10 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
   const totals = await getTotalsForNoSOs(uniqueNos);
   const totalsMap = new Map(totals.map((t) => [t.NoSO, t]));
 
-  // 4) siapkan rows: agregasi per bulan (fix 6 baris)
-  const monthKeys = getLast6MonthKeys(tanggalAcuan);
+  // 4) siapkan rows: agregasi per bulan (7 bulan untuk baseline delta, tampil 6)
+  const monthKeys7 = getLast6MonthKeys(tanggalAcuan, 7);
   const monthBuckets = new Map(
-    monthKeys.map((k) => [k, { QtySistem: 0, QtyFisik: 0 }]),
+    monthKeys7.map((k) => [k, { QtySistem: 0, QtyFisik: 0 }]),
   );
   const currentMonth = monthKey(tanggalAcuan);
 
@@ -202,7 +202,7 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
     monthBuckets.get(key).QtyFisik += Number(t.TotalQtyFisik || 0);
   }
 
-  const rows = monthKeys.map((k) => {
+  const rows7 = monthKeys7.map((k) => {
     const val = monthBuckets.get(k) || { QtySistem: 0, QtyFisik: 0 };
     return {
       Bulan: String(parseInt(k.split("-")[1], 10)),
@@ -211,6 +211,15 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
       Selisih: val.QtyFisik - val.QtySistem,
     };
   });
+
+  // Hitung delta untuk 6 bulan tampilan (index 0-5), menggunakan bulan ke-7 (index 6) sebagai baseline
+  for (let i = 0; i < 6; i++) {
+    rows7[i].DeltaQtySistem = rows7[i].QtySistem - rows7[i + 1].QtySistem;
+    rows7[i].DeltaQtyFisik = rows7[i].QtyFisik - rows7[i + 1].QtyFisik;
+  }
+
+  // Hanya tampilkan 6 bulan terbaru
+  const rows = rows7.slice(0, 6);
 
   // 5) render tabel minimal
   const left = doc.page.margins.left;
@@ -270,12 +279,16 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
   doc.font("Helvetica").fontSize(10);
 
   for (const r of rows) {
-    const data = [
-      r.Bulan,
-      formatQty(r.QtySistem),
-      formatQty(r.QtyFisik),
-      formatSelisih(r.Selisih),
-    ];
+    const qtySistemStr =
+      r.DeltaQtySistem !== undefined
+        ? `${formatQty(r.QtySistem)} (${formatSelisih(r.DeltaQtySistem)})`
+        : formatQty(r.QtySistem);
+    const qtyFisikStr =
+      r.DeltaQtyFisik !== undefined
+        ? `${formatQty(r.QtyFisik)} (${formatSelisih(r.DeltaQtyFisik)})`
+        : formatQty(r.QtyFisik);
+
+    const data = [r.Bulan, qtySistemStr, qtyFisikStr, formatSelisih(r.Selisih)];
 
     // tinggi baris
     let maxH = 0;
