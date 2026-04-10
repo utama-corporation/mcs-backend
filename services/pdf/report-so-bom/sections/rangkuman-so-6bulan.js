@@ -243,7 +243,12 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
     return;
   }
 
-  const colWidths = [90, 120, 120, 120]; // Bulan, Qty Sistem, Qty Fisik, Selisih
+  // Kolom: Bulan | [Qty Sistem | Delta] | [Qty Fisik | Delta] | Selisih
+  // col index:  0       1         2          3        4          5
+  const colWidths = [70, 100, 40, 100, 40, 80]; // Bulan, QtySistem, DeltaSistem, QtyFisik, DeltaFisik, Selisih
+  // Indeks kolom Delta — sisi kiri kolom ini adalah divider sub-kolom
+  const subDividerCols = new Set([2, 4]);
+  const subDividerWidth = 1; // <-- atur ketebalan divider di sini (pt)
   const colX = [];
   let x = doc.page.margins.left;
   for (const w of colWidths) {
@@ -251,44 +256,48 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
     x += w;
   }
 
-  const headers = ["Bulan", "Qty Sistem", "Qty Fisik", "Selisih"];
+  // Grup header atas: Bulan, Qty Sistem (span 2 kolom), Qty Fisik (span 2 kolom), Selisih
+  const groupHeaders = [
+    { label: "Bulan", colStart: 0, span: 1 },
+    { label: "Qty Sistem", colStart: 1, span: 2 },
+    { label: "Qty Fisik", colStart: 3, span: 2 },
+    { label: "Selisih", colStart: 5, span: 1 },
+  ];
   doc.fontSize(10).font("Helvetica-Bold");
-
-  let headerMaxH = 0;
-  for (let i = 0; i < headers.length; i++) {
-    const h = getTextHeight(doc, headers[i], { width: colWidths[i] - 6 });
-    if (headerMaxH < h) headerMaxH = h;
-  }
-  const headerRowH = headerMaxH + 10;
+  const groupRowH = 20;
   let y = doc.y;
 
-  for (let i = 0; i < headers.length; i++) {
-    doc.rect(colX[i], y, colWidths[i], headerRowH).stroke();
-    const textY =
-      y +
-      (headerRowH -
-        getTextHeight(doc, headers[i], { width: colWidths[i] - 6 })) /
-        2;
-    doc.text(headers[i], colX[i] + 3, textY, {
-      width: colWidths[i] - 6,
-      align: "center",
-    });
-  }
-  y += headerRowH;
+  const drawHeader = (startY) => {
+    doc.fontSize(10).font("Helvetica-Bold");
+    let hy = startY;
+    // Hanya gambar merged rect per grup — tidak ada divider internal di dalam grup
+    for (const g of groupHeaders) {
+      const gx = colX[g.colStart];
+      const gw = colWidths
+        .slice(g.colStart, g.colStart + g.span)
+        .reduce((a, b) => a + b, 0);
+      doc.rect(gx, hy, gw, groupRowH).stroke();
+      doc.text(g.label, gx + 3, hy + (groupRowH - 10) / 2, {
+        width: gw - 6,
+        align: "center",
+      });
+    }
+    return hy + groupRowH;
+  };
+
+  y = drawHeader(y);
 
   doc.font("Helvetica").fontSize(10);
 
   for (const r of rows) {
-    const qtySistemStr =
-      r.DeltaQtySistem !== undefined
-        ? `${formatQty(r.QtySistem)} (${formatSelisih(r.DeltaQtySistem)})`
-        : formatQty(r.QtySistem);
-    const qtyFisikStr =
-      r.DeltaQtyFisik !== undefined
-        ? `${formatQty(r.QtyFisik)} (${formatSelisih(r.DeltaQtyFisik)})`
-        : formatQty(r.QtyFisik);
-
-    const data = [r.Bulan, qtySistemStr, qtyFisikStr, formatSelisih(r.Selisih)];
+    const data = [
+      r.Bulan,
+      formatQty(r.QtySistem),
+      r.DeltaQtySistem !== undefined ? formatSelisih(r.DeltaQtySistem) : "-",
+      formatQty(r.QtyFisik),
+      r.DeltaQtyFisik !== undefined ? formatSelisih(r.DeltaQtyFisik) : "-",
+      formatSelisih(r.Selisih),
+    ];
 
     // tinggi baris
     let maxH = 0;
@@ -303,28 +312,25 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
     // page break
     if (y + rowH > 780) {
       doc.addPage();
-      y = doc.page.margins.top;
-      // redraw header
-      doc.fontSize(10).font("Helvetica-Bold");
-      for (let i = 0; i < headers.length; i++) {
-        doc.rect(colX[i], y, colWidths[i], headerRowH).stroke();
-        const h2 = getTextHeight(doc, headers[i], { width: colWidths[i] - 6 });
-        const textY2 = y + (headerRowH - h2) / 2;
-        doc.text(headers[i], colX[i] + 3, textY2, {
-          width: colWidths[i] - 6,
-          align: "center",
-        });
-      }
-      y += headerRowH;
+      y = drawHeader(doc.page.margins.top);
       doc.font("Helvetica").fontSize(10);
     }
 
     for (let i = 0; i < data.length; i++) {
-      doc.rect(colX[i], y, colWidths[i], rowH).stroke();
-      const centerCols = [0, 1, 2, 3];
+      if (subDividerCols.has(i)) {
+        // Gambar border sel dengan ketebalan divider sub-kolom
+        doc
+          .save()
+          .lineWidth(subDividerWidth)
+          .rect(colX[i], y, colWidths[i], rowH)
+          .stroke()
+          .restore();
+      } else {
+        doc.rect(colX[i], y, colWidths[i], rowH).stroke();
+      }
       doc.text(String(data[i]), colX[i] + 3, y + 5, {
         width: colWidths[i] - 6,
-        align: centerCols.includes(i) ? "center" : "left",
+        align: "center",
       });
     }
     y += rowH;
