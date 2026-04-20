@@ -185,14 +185,15 @@ async function renderRangkumanSO6BulanTotals(doc, noSO) {
   const monthBuckets = new Map(
     monthKeys7.map((k) => [k, { QtySistem: 0, QtyFisik: 0 }]),
   );
-  const currentMonth = monthKey(tanggalAcuan);
-
+  // allDocs: SO acuan di depan, sisanya sudah DESC (terbaru dulu) dari query
   const allDocs = [{ NoSO: noSO, Tanggal: tanggalAcuan }, ...matches];
+  const filledMonths = new Set();
   for (const item of allDocs) {
     const key = monthKey(item.Tanggal);
     if (!monthBuckets.has(key)) continue;
-    // Bulan acuan harus mencerminkan NoSO aktif saja (tidak diakumulasi dengan NoSO lain di bulan yang sama).
-    if (key === currentMonth && item.NoSO !== noSO) continue;
+    // Hanya pakai 1 SO per bulan (SO terbaru / SO acuan untuk bulan acuan)
+    if (filledMonths.has(key)) continue;
+    filledMonths.add(key);
 
     const t = totalsMap.get(item.NoSO) || {
       TotalQtySistem: 0,
