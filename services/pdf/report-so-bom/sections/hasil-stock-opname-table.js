@@ -1,4 +1,10 @@
 const { pool } = require('../../../../db');
+const fs = require('fs');
+const path = require('path');
+const sharp = require('sharp');
+
+const ASSET_DOCS_PATH = '\\\\192.168.10.100\\WebServer\\xampp\\htdocs\\mcs\\assets\\docs\\masterAsset';
+const SUPPORTED_EXTENSIONS = ['.jpg', '.jpeg', '.webp', '.png'];
 
 function getTextHeight(doc, text, options) {
   return doc.heightOfString(String(text ?? '-'), options);
@@ -42,12 +48,13 @@ function preserveOriginalSpacing(text) {
   return cleanText;
 }
 
-async function renderHasilStockOpnameTable(doc, noSO) {
+async function renderHasilStockOpnameTable(doc, noSO, withImages = false) {
   // Query sederhana tanpa CONVERT - ambil data asli
   const [rows] = await pool.query(`
-    SELECT 
+    SELECT
       CONCAT(asset.AssetName, ' (', asset.AssetCode, ')') AS AssetCode,
       bom.part AS part_name,
+      bom.id AS bom_id,
       so_bom.Qty AS qty_on_hand,
       hasil.QtyFound,
       hasil.Remark,
@@ -59,6 +66,23 @@ async function renderHasilStockOpnameTable(doc, noSO) {
     WHERE so_bom.NoSO = ? AND bom.level != 'relationship'
     ORDER BY so_bom.AssetCode ASC, bom.part ASC
   `, [noSO]);
+
+  // Batch query semua attachment sekaligus (hanya jika withImages)
+  let attachmentMap = {};
+  if (withImages) {
+    const bomIds = [...new Set(rows.map(r => r.bom_id).filter(Boolean))];
+    if (bomIds.length) {
+      const placeholders = bomIds.map(() => '?').join(',');
+      const [attachRows] = await pool.query(
+        `SELECT part_id, filename FROM tb_attachment_asset WHERE part_id IN (${placeholders})`,
+        bomIds
+      );
+      for (const att of attachRows) {
+        if (!attachmentMap[att.part_id]) attachmentMap[att.part_id] = [];
+        attachmentMap[att.part_id].push(att.filename);
+      }
+    }
+  }
 
   if (!rows.length) {
     doc.text('Tidak ada data hasil stock opname.');
@@ -84,12 +108,33 @@ async function renderHasilStockOpnameTable(doc, noSO) {
       ...row,
       AssetCode: originalAssetCode,
       part_name: preserveOriginalSpacing(row.part_name),
-      Remark: preserveOriginalSpacing(row.Remark)
+      Remark: preserveOriginalSpacing(row.Remark),
+      bom_id: row.bom_id
     });
   });
 
-  const colX = [40, 70, 250, 310, 370, 430];
-  const colWidths = [30, 180, 60, 60, 60, 125];
+  // Layout kolom: dengan gambar sisipkan kolom "Gambar" antara No dan Nama Alat Kerja
+  // Total usable width = 515 (A4 595 - margin 40 kiri - 40 kanan)
+  const IMG_CELL_W = 100;
+  const IMG_CELL_H = 80; // tinggi minimum cell saat ada gambar
+
+  // Total usable width = 515 (A4 595 - margin 40 kiri - 40 kanan)
+  // withImages:  25 + 100 + 135 + 55 + 55 + 55 + 90 = 515
+  const colX      = withImages ? [40,  65, 165, 300, 355, 410, 465] : [40,  70, 250, 310, 370, 430];
+  const colWidths = withImages ? [25, 100, 135,  55,  55,  55,  90] : [30, 180,  60,  60,  60, 125];
+  const headers   = withImages
+    ? ['No', 'Gambar', 'Nama Alat Kerja', 'Jumlah di Sistem', 'Jumlah Fisik', 'Selisih', 'Keterangan']
+    : ['No', 'Nama Alat Kerja', 'Jumlah di Sistem', 'Jumlah Fisik', 'Selisih', 'Keterangan'];
+
+  // Indeks kolom logis (tidak berubah tergantung mode)
+  const COL_NO      = 0;
+  const COL_IMG     = withImages ? 1 : -1;
+  const COL_PART    = withImages ? 2 : 1;
+  const COL_SISTEM  = withImages ? 3 : 2;
+  const COL_FISIK   = withImages ? 4 : 3;
+  const COL_SELISIH = withImages ? 5 : 4;
+  const COL_REMARK  = withImages ? 6 : 5;
+
   let y = doc.y;
   let groupIndex = 1;
 
@@ -99,27 +144,21 @@ async function renderHasilStockOpnameTable(doc, noSO) {
       y = doc.y;
     }
 
-    // Tampilkan assetCode dengan spacing asli
     doc.fontSize(11).font('Helvetica').text(`${groupIndex}. ${assetCode}`, colX[0] + 5, y);
     y += 15;
 
-    const headers = ['No', 'Nama Alat Kerja', 'Jumlah di Sistem', 'Jumlah Fisik', 'Selisih', 'Keterangan'];
+    // Header row
     doc.fontSize(10).font('Helvetica-Bold');
-
     let headerMaxHeight = 0;
     for (let i = 0; i < headers.length; i++) {
-      const height = getTextHeight(doc, headers[i], { width: colWidths[i] - 6 });
-      if (headerMaxHeight < height) headerMaxHeight = height;
+      const h = getTextHeight(doc, headers[i], { width: colWidths[i] - 6 });
+      if (h > headerMaxHeight) headerMaxHeight = h;
     }
     const headerRowHeight = headerMaxHeight + 10;
-
     for (let i = 0; i < headers.length; i++) {
       doc.rect(colX[i], y, colWidths[i], headerRowHeight).stroke();
       const textY = y + (headerRowHeight - getTextHeight(doc, headers[i], { width: colWidths[i] - 6 })) / 2;
-      doc.text(headers[i], colX[i] + 3, textY, {
-        width: colWidths[i] - 6,
-        align: 'center'
-      });
+      doc.text(headers[i], colX[i] + 3, textY, { width: colWidths[i] - 6, align: 'center' });
     }
     y += headerRowHeight;
 
@@ -131,84 +170,100 @@ async function renderHasilStockOpnameTable(doc, noSO) {
 
     for (const row of parts) {
       const sistem = parseFloat(row.qty_on_hand) || 0;
-      const fisik = parseFloat(row.QtyFound) || 0;
+      const fisik  = parseFloat(row.QtyFound)    || 0;
       const selisihValue = fisik - sistem;
-
-      totalSistem += sistem;
-      totalFisik += fisik;
+      totalSistem  += sistem;
+      totalFisik   += fisik;
       totalSelisih += selisihValue;
 
       let selisihDisplay = '0';
-      if (selisihValue > 0) {
-        selisihDisplay = `+${formatQty(selisihValue)}`;
-      } else if (selisihValue < 0) {
-        selisihDisplay = `-${formatQty(Math.abs(selisihValue))}`;
+      if (selisihValue > 0)      selisihDisplay = `+${formatQty(selisihValue)}`;
+      else if (selisihValue < 0) selisihDisplay = `-${formatQty(Math.abs(selisihValue))}`;
+
+      const remark = selisihValue === 0
+        ? (row.Remark && row.Remark.trim() !== '-' ? row.Remark : 'Sesuai')
+        : (row.Remark || '-');
+
+      // Cari gambar pertama untuk part ini (hanya jika withImages)
+      let imgPath = null;
+      if (withImages && row.bom_id) {
+        const filenames = attachmentMap[row.bom_id] || [];
+        for (const filename of filenames) {
+          const ext = path.extname(filename).toLowerCase();
+          if (!SUPPORTED_EXTENSIONS.includes(ext)) continue;
+          const fp = path.join(ASSET_DOCS_PATH, filename);
+          if (fs.existsSync(fp)) { imgPath = fp; break; }
+        }
       }
 
-      let remark;
-      if (selisihValue === 0) {
-        remark = row.Remark && row.Remark.trim() !== '-' ? row.Remark : 'Sesuai';
-      } else {
-        remark = row.Remark || '-';
-      }
-      
-      const data = [
-        nomor,
-        row.part_name || '-',
-        formatQty(sistem),
-        formatQty(fisik),
-        selisihDisplay,
-        remark
-      ];
+      // Hitung tinggi teks per kolom (skip kolom Gambar)
+      const textCols = withImages
+        ? [nomor, '', row.part_name || '-', formatQty(sistem), formatQty(fisik), selisihDisplay, remark]
+        : [nomor, row.part_name || '-', formatQty(sistem), formatQty(fisik), selisihDisplay, remark];
 
-      let maxHeight = 0;
-      for (let i = 0; i < data.length; i++) {
-        const height = getTextHeight(doc, data[i], { width: colWidths[i] - 6 });
-        if (height > maxHeight) maxHeight = height;
+      let maxTextHeight = 0;
+      for (let i = 0; i < textCols.length; i++) {
+        if (withImages && i === COL_IMG) continue; // kolom gambar, skip hitung teks
+        const h = getTextHeight(doc, textCols[i], { width: colWidths[i] - 6 });
+        if (h > maxTextHeight) maxTextHeight = h;
       }
 
-      const rowHeight = maxHeight + 10;
+      // Jika ada gambar, tinggi baris minimal IMG_CELL_H
+      const rowHeight = Math.max(maxTextHeight + 10, withImages && imgPath ? IMG_CELL_H + 8 : 0);
+
       if (y + rowHeight > 780) {
         doc.addPage();
         y = 40;
       }
 
-      for (let i = 0; i < data.length; i++) {
+      // Gambar border & isi semua kolom
+      for (let i = 0; i < textCols.length; i++) {
         doc.rect(colX[i], y, colWidths[i], rowHeight).stroke();
-        const centerAlignedCols = [0, 2, 3, 4];
-        
-        // Pastikan semua text di-convert ke string yang aman
-        const safeText = String(data[i] || '');
-        doc.text(safeText, colX[i] + 3, y + 5, {
-          width: colWidths[i] - 6,
-          align: centerAlignedCols.includes(i) ? 'center' : 'left'
-        });
+
+        if (withImages && i === COL_IMG) {
+          // Render gambar di dalam cell
+          if (imgPath) {
+            const pad = 3;
+            const maxW = colWidths[i] - pad * 2;
+            const maxH = rowHeight - pad * 2;
+            try {
+              // Convert ke JPEG agar PDFKit bisa render semua format (webp, png, jpg, dll)
+              const jpegBuffer = await sharp(imgPath).flatten({ background: '#ffffff' }).jpeg({ quality: 85 }).toBuffer();
+              doc.image(jpegBuffer, colX[i] + pad, y + pad, { fit: [maxW, maxH] });
+            } catch (e) {
+              console.error('[IMG] render error:', imgPath, e.message);
+              doc.fontSize(6).text('?', colX[i] + 3, y + rowHeight / 2 - 4, { width: colWidths[i] - 6, align: 'center' });
+            }
+          }
+          continue;
+        }
+
+        const centerAlignedCols = [COL_NO, COL_SISTEM, COL_FISIK, COL_SELISIH];
+        const safeText = String(textCols[i] || '');
+        doc.fontSize(10).font('Helvetica')
+          .text(safeText, colX[i] + 3, y + 5, {
+            width: colWidths[i] - 6,
+            align: centerAlignedCols.includes(i) ? 'center' : 'left'
+          });
       }
 
       y += rowHeight;
       nomor++;
     }
 
-    // Baris TOTAL (unchanged)
-    const totalLabel = 'TOTAL';
-    
+    // Baris TOTAL
     let totalSelisihDisplay = '0';
-    if (totalSelisih > 0) {
-      totalSelisihDisplay = `+${formatQty(totalSelisih)}`;
-    } else if (totalSelisih < 0) {
-      totalSelisihDisplay = `-${formatQty(Math.abs(totalSelisih))}`;
-    }
-    
-    const totalData = [
-      formatQty(totalSistem),
-      formatQty(totalFisik),
-      totalSelisihDisplay,
-      ''
-    ];
+    if (totalSelisih > 0)      totalSelisihDisplay = `+${formatQty(totalSelisih)}`;
+    else if (totalSelisih < 0) totalSelisihDisplay = `-${formatQty(Math.abs(totalSelisih))}`;
+
+    const totalData = [formatQty(totalSistem), formatQty(totalFisik), totalSelisihDisplay, ''];
+
+    // Merged cell = kolom No + (Gambar jika ada) + Nama Alat Kerja
+    const mergedWidth = colX[COL_PART] + colWidths[COL_PART] - colX[COL_NO];
 
     let totalRowHeight = Math.max(
-      getTextHeight(doc, totalLabel, { width: colWidths[0] + colWidths[1] - 6 }),
-      ...totalData.map((d, i) => getTextHeight(doc, d, { width: colWidths[i + 2] - 6 }))
+      getTextHeight(doc, 'TOTAL', { width: mergedWidth - 6 }),
+      ...totalData.map((d, i) => getTextHeight(doc, d, { width: colWidths[COL_SISTEM + i] - 6 }))
     ) + 10;
 
     if (y + totalRowHeight > 780) {
@@ -216,20 +271,15 @@ async function renderHasilStockOpnameTable(doc, noSO) {
       y = 40;
     }
 
-    const mergedX = colX[0];
-    const mergedWidth = colWidths[0] + colWidths[1];
-    doc.rect(mergedX, y, mergedWidth, totalRowHeight).stroke();
-    doc.font('Helvetica-Bold').text(totalLabel, mergedX + 3, y + 5, {
-      width: mergedWidth - 6,
-      align: 'center'
-    });
+    doc.rect(colX[COL_NO], y, mergedWidth, totalRowHeight).stroke();
+    doc.font('Helvetica-Bold').text('TOTAL', colX[COL_NO] + 3, y + 5, { width: mergedWidth - 6, align: 'center' });
 
     for (let i = 0; i < totalData.length; i++) {
-      const colIndex = i + 2;
-      doc.rect(colX[colIndex], y, colWidths[colIndex], totalRowHeight).stroke();
-      doc.text(String(totalData[i]), colX[colIndex] + 3, y + 5, {
-        width: colWidths[colIndex] - 6,
-        align: [2, 3, 4].includes(colIndex) ? 'center' : 'left'
+      const ci = COL_SISTEM + i;
+      doc.rect(colX[ci], y, colWidths[ci], totalRowHeight).stroke();
+      doc.text(String(totalData[i]), colX[ci] + 3, y + 5, {
+        width: colWidths[ci] - 6,
+        align: i < 3 ? 'center' : 'left'
       });
     }
 

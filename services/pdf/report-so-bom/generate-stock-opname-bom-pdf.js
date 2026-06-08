@@ -29,7 +29,7 @@ function drawSeparator(doc, { dashed = false, color = '#999', thick = 0.5, gap =
 
 
 async function generateStockOpnameBomPdf(res, metadata) {
-  const { noSO } = metadata;
+  const { noSO, withImages = false } = metadata;
   const MINIMUM_BOTTOM_MARGIN = 80; // Margin minimum di bagian bawah halaman
 
   const doc = new PDFDocument({ margin: 40, size: 'A4' });
@@ -73,7 +73,7 @@ async function generateStockOpnameBomPdf(res, metadata) {
       }
 
   // Render tabel hasil stock opname
-  await renderHasilStockOpnameTable(doc, noSO);
+  await renderHasilStockOpnameTable(doc, noSO, withImages);
 
   // Cek spacing sebelum non-part table
   if (doc.y > doc.page.height - doc.page.margins.bottom - MINIMUM_BOTTOM_MARGIN - 80) {

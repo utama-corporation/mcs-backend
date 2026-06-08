@@ -15,6 +15,7 @@ router.get("/report-so-bom/:noso/pdf", async (req, res) => {
     const lockedDate = req.query.lockeddate || "-";
     const perusahaan = req.query.perusahaan;
     const lokasi = req.query.lokasi;
+    const withImages = req.query.with_images === "true";
 
     res.setHeader("Content-Type", "application/pdf");
     const safeNoSO = noSO.replace(/\./g, "_");
@@ -29,6 +30,7 @@ router.get("/report-so-bom/:noso/pdf", async (req, res) => {
       lockedDate,
       perusahaan,
       lokasi,
+      withImages,
     });
   } catch (error) {
     console.error("❌ Error:", error.message);
