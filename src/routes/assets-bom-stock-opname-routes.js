@@ -247,6 +247,25 @@ router.get("/part-bom", async (req, res) => {
       remarkMap[row.IdBOM] = row.Remark;
     });
 
+    // 🖼️ Batch query attachment untuk semua bom id
+    const allBomIds = bomRows.map((r) => r.id).filter(Boolean);
+    const attachmentMap = {};
+    if (allBomIds.length) {
+      const placeholders = allBomIds.map(() => "?").join(",");
+      const [attRows] = await pool.query(
+        `SELECT part_id, filename, original_filename FROM tb_attachment_asset WHERE part_id IN (${placeholders})`,
+        allBomIds,
+      );
+      attRows.forEach((att) => {
+        if (!attachmentMap[att.part_id]) attachmentMap[att.part_id] = [];
+        attachmentMap[att.part_id].push({
+          filename: att.filename,
+          original_filename: att.original_filename,
+          url: `/api/attachment-asset/${encodeURIComponent(att.filename)}`,
+        });
+      });
+    }
+
     // Kelompokkan data berdasarkan relationship dan sub parts
     const groupedData = [];
     const relationshipItems = bomRows.filter(
@@ -294,6 +313,7 @@ router.get("/part-bom", async (req, res) => {
               ? parseFloat(qtyFoundMap[part.id]).toString()
               : null,
           remark: remarkMap[part.id] || "",
+          attachments: attachmentMap[part.id] || [],
         });
       });
 
@@ -320,7 +340,8 @@ router.get("/part-bom", async (req, res) => {
             ? parseFloat(qtyFoundMap[item.id]).toString()
             : null,
         remark: remarkMap[item.id] || "",
-        parts: [], // Tidak ada sub parts
+        attachments: attachmentMap[item.id] || [],
+        parts: [],
       });
     });
 
@@ -698,6 +719,38 @@ router.put("/update-stock-opname", verifyToken, async (req, res) => {
       .status(500)
       .json({ message: "Internal Server Error", error: error.message });
   }
+});
+
+// 🖼️ Proxy endpoint untuk serve gambar attachment dari network share
+const ATTACHMENT_ASSET_PATH =
+  "\\\\192.168.10.100\\WebServer\\xampp\\htdocs\\mcs\\assets\\docs\\masterAsset";
+
+router.get("/attachment-asset/:filename", (req, res) => {
+  const filename = req.params.filename;
+
+  // Hanya izinkan karakter aman, cegah path traversal
+  if (!/^[\w\-. ]+$/.test(filename)) {
+    return res.status(400).json({ message: "Invalid filename" });
+  }
+
+  const filePath = path.join(ATTACHMENT_ASSET_PATH, filename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ message: "File not found" });
+  }
+
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+  };
+  const contentType = mimeTypes[ext] || "application/octet-stream";
+
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Cache-Control", "public, max-age=86400"); // cache 1 hari
+  fs.createReadStream(filePath).pipe(res);
 });
 
 module.exports = router;
